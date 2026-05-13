@@ -90,36 +90,112 @@ h1 { color: #9cf; font-size: 18px; font-weight: normal; letter-spacing: 2px; }
   Controller range: ~3–4m, within headset FOV.
 </div>
 
+<div id="session-display" style="font-size:11px;color:#888;margin-top:4px;"></div>
+
 <canvas id="xr-canvas"></canvas>
 
+<script type="module" src="./firebase-config.js"></script>
+
 <script>
-// ── WebSocket connection ─────────────────────────────────────────────────────
+// ── Relay: LAN (WebSocket) when served from a private host, Firebase otherwise
+
+function isLanHost(host) {
+  return host === 'localhost' || host === '127.0.0.1'
+    || /^192\.168\./.test(host) || /^10\./.test(host)
+    || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host);
+}
+const USE_FIREBASE = !isLanHost(location.hostname);
+
+// Session code from URL hash (#s=ABCD). Required in Firebase mode.
+function parseHashCode() {
+  const m = (location.hash || '').match(/[#&]s=([A-Za-z0-9]+)/);
+  return m ? m[1].toUpperCase() : null;
+}
+let SESSION = parseHashCode();
+const sessionEl = document.getElementById('session-display');
+if (USE_FIREBASE) {
+  sessionEl.textContent = SESSION ? `Session: ${SESSION}` : 'No session code — append #s=CODE to the URL';
+} else {
+  sessionEl.textContent = 'LAN mode (WebSocket)';
+}
+
+// ── LAN WebSocket mode ──────────────────────────────────────────────────────
 
 const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}?role=tracker`;
 let ws = null;
-let wsReady = false;
 
 function wsConnect() {
   ws = new WebSocket(WS_URL);
   ws.onopen = () => {
-    wsReady = true;
     setStatus('ws-dot', 'green', 'ws-status', `Connected to ${location.host}`);
     document.getElementById('start-btn').disabled = false;
   };
   ws.onclose = () => {
-    wsReady = false;
     setStatus('ws-dot', 'red', 'ws-status', 'Disconnected — retrying…');
     document.getElementById('start-btn').disabled = true;
     setTimeout(wsConnect, 2000);
   };
   ws.onerror = () => {};
 }
-wsConnect();
 
-function wsSend(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
+// ── Firebase RTDB mode ──────────────────────────────────────────────────────
+
+let fb = null;   // { db, ref, set, remove, onDisconnect, serverTimestamp }
+let poseRef = null;
+let recenterRef = null;
+let presenceRef = null;
+
+function fbConnect() {
+  if (!SESSION) {
+    setStatus('ws-dot', 'red', 'ws-status', 'Missing session code in URL (?#s=CODE)');
+    return;
   }
+  const start = () => {
+    fb = window.splattrackFirebase;
+    poseRef     = fb.ref(fb.db, `sessions/${SESSION}/pose`);
+    recenterRef = fb.ref(fb.db, `sessions/${SESSION}/recenter`);
+    presenceRef = fb.ref(fb.db, `sessions/${SESSION}/tracker_online`);
+    fb.set(presenceRef, true);
+    fb.onDisconnect(presenceRef).remove();
+    fb.onDisconnect(poseRef).remove();
+    setStatus('ws-dot', 'green', 'ws-status', `Firebase session ${SESSION}`);
+    document.getElementById('start-btn').disabled = false;
+  };
+  if (window.splattrackFirebase) start();
+  else window.addEventListener('splattrack-firebase-ready', start, { once: true });
+}
+
+if (USE_FIREBASE) fbConnect(); else wsConnect();
+
+// Throttle pose writes to ~30Hz in Firebase mode to save bandwidth.
+let lastPoseSent = 0;
+
+function relaySendPose(obj) {
+  if (USE_FIREBASE) {
+    if (!poseRef) return;
+    const now = performance.now();
+    if (now - lastPoseSent < 33) return;
+    lastPoseSent = now;
+    fb.set(poseRef, obj);
+  } else {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  }
+}
+
+function relaySendRecenter() {
+  if (USE_FIREBASE) {
+    if (recenterRef && fb) fb.set(recenterRef, fb.serverTimestamp());
+  } else {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'tracker_recenter' }));
+    }
+  }
+}
+
+// Back-compat shim so the rest of the script can keep calling wsSend().
+function wsSend(obj) {
+  if (obj && obj.type === 'pose_tracker') relaySendPose(obj);
+  else if (obj && obj.type === 'tracker_recenter') relaySendRecenter();
 }
 
 // ── WebXR ────────────────────────────────────────────────────────────────────

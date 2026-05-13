@@ -5,15 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SplatTrack</title>
 
-<!-- Import map — resolved from local node_modules (works offline) -->
-<script type="importmap">
-{
-  "imports": {
+<!-- Import map. Falls back to CDN when node_modules isn't served (e.g. GitHub Pages). -->
+<script>
+(function () {
+  const isLan = host => host === 'localhost' || host === '127.0.0.1'
+    || /^192\.168\./.test(host) || /^10\./.test(host)
+    || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host);
+  const useCdn = !isLan(location.hostname);
+  const map = useCdn ? {
+    "three": "https://unpkg.com/three@0.183.2/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.183.2/examples/jsm/",
+    "gaussian-splats-3d": "https://unpkg.com/@mkkellogg/gaussian-splats-3d@0.4.7/build/gaussian-splats-3d.module.js"
+  } : {
     "three": "/node_modules/three/build/three.module.js",
-    "three/addons/": "/node_modules/three/examples/jsm/"
-  }
-}
+    "three/addons/": "/node_modules/three/examples/jsm/",
+    "gaussian-splats-3d": "/node_modules/@mkkellogg/gaussian-splats-3d/build/gaussian-splats-3d.module.js"
+  };
+  const el = document.createElement('script');
+  el.type = 'importmap';
+  el.textContent = JSON.stringify({ imports: map });
+  document.currentScript.after(el);
+})();
 </script>
+
+<script type="module" src="./firebase-config.js"></script>
 
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -526,8 +541,12 @@ hr { border: none; border-top: 1px solid #222; margin: 2px 0; }
 
       <hr style="margin:7px 0;">
       <div style="font-size:10px;color:#555;line-height:1.7;">
+        <div id="session-row" style="display:none;color:#9cf;">
+          Session: <span id="session-code" style="font-weight:bold;letter-spacing:2px;"></span>
+          <span id="session-copy" class="link" style="margin-left:6px;">[copy URL]</span>
+        </div>
         <div>Quest: <span id="quest-link" class="link">open in Quest browser</span></div>
-        <div>OpenTrack: UDP → port 4242</div>
+        <div id="opentrack-row">OpenTrack: UDP → port 4242</div>
         <div>Gamepad: auto-detected</div>
         <div id="gamepad-status" style="color:#666;"></div>
       </div>
@@ -589,7 +608,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { Pass } from 'three/addons/postprocessing/Pass.js';
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
-import * as GS3D from '/node_modules/@mkkellogg/gaussian-splats-3d/build/gaussian-splats-3d.module.js';
+import * as GS3D from 'gaussian-splats-3d';
 
 // ────────────────────────────────────────────────────────────────────────────
 //  State
@@ -668,9 +687,23 @@ if (IS_PROJECTOR) {
 //  Link generation for tracker pages
 // ────────────────────────────────────────────────────────────────────────────
 
-const networkBase = `${location.protocol}//${location.hostname}:${location.port}`;
-document.getElementById('quest-link').onclick = () =>
-  window.open(`${networkBase}/quest-tracker.html`, '_blank');
+const networkBase = `${location.protocol}//${location.host}${location.pathname.replace(/[^/]*$/, '')}`.replace(/\/$/, '');
+const questUrl = window.SPLATTRACK_SESSION
+  ? `${networkBase}/quest-tracker.html#s=${window.SPLATTRACK_SESSION}`
+  : `${networkBase}/quest-tracker.html`;
+document.getElementById('quest-link').textContent = questUrl;
+document.getElementById('quest-link').onclick = () => window.open(questUrl, '_blank');
+
+if (window.SPLATTRACK_SESSION) {
+  document.getElementById('session-row').style.display = '';
+  document.getElementById('session-code').textContent = window.SPLATTRACK_SESSION;
+  document.getElementById('session-copy').onclick = () => {
+    navigator.clipboard?.writeText(questUrl);
+    document.getElementById('session-copy').textContent = '[copied]';
+    setTimeout(() => { document.getElementById('session-copy').textContent = '[copy URL]'; }, 1500);
+  };
+  document.getElementById('opentrack-row').style.display = 'none';
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 //  Server scene list
@@ -678,7 +711,9 @@ document.getElementById('quest-link').onclick = () =>
 
 async function refreshSceneList() {
   try {
-    const files = await fetch('/api/scenes').then(r => r.json());
+    const resp = await fetch('/api/scenes');
+    if (!resp.ok) throw new Error('no server');
+    const files = await resp.json();
     const sel = document.getElementById('scene-select');
     sel.innerHTML = '<option value="">— select —</option>';
     files.forEach(f => {
@@ -687,7 +722,12 @@ async function refreshSceneList() {
       opt.textContent = f;
       sel.appendChild(opt);
     });
-  } catch { /* server not ready */ }
+  } catch {
+    // No server (e.g. GitHub Pages) — hide the server-scene row, rely on drag-drop.
+    const sel = document.getElementById('scene-select');
+    const row = sel?.closest('.row');
+    if (row) row.style.display = 'none';
+  }
 }
 refreshSceneList();
 
@@ -1573,6 +1613,35 @@ function updateGamepad() {
 
 let ws = null;
 
+// Relay mode: LAN (WebSocket via Node server) on private hosts,
+// Firebase RTDB elsewhere (GitHub Pages, custom domain, etc.).
+function isLanHost(host) {
+  return host === 'localhost' || host === '127.0.0.1'
+    || /^192\.168\./.test(host) || /^10\./.test(host)
+    || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host);
+}
+const USE_FIREBASE = !isLanHost(location.hostname);
+
+function randomCode() {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
+  let s = '';
+  for (let i = 0; i < 4; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return s;
+}
+
+function parseHashCode() {
+  const m = (location.hash || '').match(/[#&]s=([A-Za-z0-9]+)/);
+  return m ? m[1].toUpperCase() : null;
+}
+
+let SESSION = null;
+if (USE_FIREBASE) {
+  SESSION = parseHashCode() || sessionStorage.getItem('splattrack_session') || randomCode();
+  sessionStorage.setItem('splattrack_session', SESSION);
+  if (parseHashCode() !== SESSION) location.hash = `s=${SESSION}`;
+  window.SPLATTRACK_SESSION = SESSION;
+}
+
 function wsConnect() {
   const role = IS_PROJECTOR ? 'viewer' : 'controller';
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1580,12 +1649,12 @@ function wsConnect() {
 
   const connect = () => {
     ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer'; // so we can decode sync
-    window.ws = ws; // expose for debugging
+    ws.binaryType = 'arraybuffer';
+    window.ws = ws;
     ws.onopen = () => console.log('[WS] connected as', role);
     ws.onclose = (e) => {
       console.log('[WS] closed', e.code, e.reason);
-      setTimeout(connect, 2000); // reconnect
+      setTimeout(connect, 2000);
     };
     ws.onerror = (e) => console.warn('[WS] error', e);
     ws.onmessage = (e) => {
@@ -1605,7 +1674,37 @@ function wsConnect() {
   };
   connect();
 }
-wsConnect();
+
+function fbConnect() {
+  const start = () => {
+    const { db, ref, onValue } = window.splattrackFirebase;
+    const poseRef     = ref(db, `sessions/${SESSION}/pose`);
+    const recenterRef = ref(db, `sessions/${SESSION}/recenter`);
+    const presenceRef = ref(db, `sessions/${SESSION}/tracker_online`);
+    let lastRecenter = 0;
+
+    onValue(poseRef, (snap) => {
+      const msg = snap.val();
+      if (!msg) return;
+      handleWsMessage({ ...msg, type: 'pose_tracker' });
+    });
+    onValue(recenterRef, (snap) => {
+      const t = snap.val();
+      if (!t || t === lastRecenter) return;
+      lastRecenter = t;
+      handleWsMessage({ type: 'tracker_recenter' });
+    });
+    onValue(presenceRef, (snap) => {
+      if (!snap.val()) handleWsMessage({ type: 'tracker_disconnected' });
+    });
+
+    console.log(`[FB] subscribed to session ${SESSION}`);
+  };
+  if (window.splattrackFirebase) start();
+  else window.addEventListener('splattrack-firebase-ready', start, { once: true });
+}
+
+if (USE_FIREBASE) fbConnect(); else wsConnect();
 
 function wsSend(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {

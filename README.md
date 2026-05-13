@@ -35,8 +35,27 @@ Drop a `.splat` / `.ply` / `.spz` / `.ksplat` into `scenes/` (not checked in) an
 
 Smoothing on the tracker page is on by default; toggle off for low-latency framing.
 
+## GitHub Pages deployment (no server, Firebase relay)
+
+The repo also runs as a static site on GitHub Pages, using Firebase Realtime Database to relay pose data between the Quest browser and the viewer browser — no Node server required.
+
+**One-time setup:**
+
+1. Firebase console → create a project → enable **Realtime Database** (not Firestore).
+2. Edit [firebase-config.js](./firebase-config.js) with your project's config object. (API keys are project identifiers, not secrets — safe to commit.) Make sure `databaseURL` matches your RTDB region.
+3. RTDB rules: test mode (open for 30 days) is fine for a short event. For longer use, restrict to `sessions/$code` paths.
+4. GitHub repo → **Settings → Pages → Source: Deploy from `main` / root**. Wait for the deploy.
+
+**Use:**
+
+- Viewer (operator's PC): `https://<user>.github.io/splattrack/` — auto-generates a session code and shows the Quest URL.
+- Quest browser: open the URL shown by the viewer (or scan/paste — it looks like `…/quest-tracker.html#s=ABCD`).
+- Drag a `.splat` / `.ply` / `.spz` / `.ksplat` onto the viewer's drop zone — files are read locally, never uploaded.
+
+**Mode auto-detection:** Pages on `localhost` or a private IP → uses WebSocket via the local Node server. Pages served from a public host → uses Firebase. No flag, no config switch.
+
 ## Notes
 
 - Headset cameras must stay active and the controller within ~3–4m line-of-sight for inside-out tracking.
-- WebXR works over plain HTTP on LAN; HTTPS is only required for hand-tracking or off-LAN hosting.
+- WebXR works over plain HTTP on LAN; over the public internet HTTPS is required (GitHub Pages provides it automatically).
 - `scenes/` and `node_modules/` are gitignored.
