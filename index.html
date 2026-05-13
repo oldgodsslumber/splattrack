@@ -413,6 +413,11 @@ hr { border: none; border-top: 1px solid #222; margin: 2px 0; }
         <input type="range" id="sl-max-blur" min="0" max="0.05" step="0.001" value="0.01">
         <span class="val" id="v-max-blur">0.010</span>
       </div>
+      <div class="row" title="Higher = fewer ghost orbs from soft splat halos, but harder splat edges. Try 0.05–0.2.">
+        <label>Depth α-thresh</label>
+        <input type="range" id="sl-dof-alpha" min="0.004" max="0.5" step="0.002" value="0.05">
+        <span class="val" id="v-dof-alpha">0.050</span>
+      </div>
       <button class="btn" id="btn-focus-here" style="width:100%;margin-top:4px;" title="Set focus distance to whatever the camera is currently looking at (orbit target)">Focus on Orbit Target</button>
     </div>
 
@@ -641,6 +646,7 @@ const settings = {
   aperture: 2.8,
   focusDistance: 5,
   maxBlur: 0.01,
+  dofAlphaThreshold: 0.05,
   // Tracker channel gates
   trackerApplyPosition: false,  // off by default since iOS Safari can't do 6DOF
   trackerApplyRotation: true,
@@ -1066,6 +1072,31 @@ function resizeDOF() {
   dofMaterial.uniforms.uResolution.value.set(w, h);
 }
 
+// Patch the GS3D splat fragment shader so its hardcoded discard threshold
+// becomes a uniform. The library's default (`alpha < 1.0/255.0`) is fine for
+// the visual blend but lets faint Gaussian halos contaminate the depth buffer,
+// which produces in-focus "orb" ghosts when DOF reads from that depth.
+function patchSplatShaderForDOF() {
+  const mesh = viewer && viewer.splatMesh;
+  if (!mesh || !mesh.material) return;
+  const m = mesh.material;
+  if (m.userData._dofPatched) return;
+  if (typeof m.fragmentShader !== 'string') return;
+  const needle = 'alpha < 1.0f / 255.0f';
+  if (!m.fragmentShader.includes(needle)) return;
+  m.fragmentShader = m.fragmentShader.replace(needle, 'alpha < uDepthAlphaThreshold');
+  m.uniforms.uDepthAlphaThreshold = { value: 1.0 / 255.0 };
+  m.userData._dofPatched = true;
+  m.needsUpdate = true;
+}
+
+function setSplatDepthAlphaThreshold(v) {
+  const m = viewer && viewer.splatMesh && viewer.splatMesh.material;
+  if (m && m.uniforms && m.uniforms.uDepthAlphaThreshold) {
+    m.uniforms.uDepthAlphaThreshold.value = v;
+  }
+}
+
 function setDOFEnabled(enabled) {
   if (!viewer) return;
   settings.dofEnabled = enabled;
@@ -1074,9 +1105,13 @@ function setDOFEnabled(enabled) {
 
   if (enabled) {
     ensureDOF();
-    // Flip depthWrite on the splat material so the depth buffer gets populated
+    // Flip depthWrite on the splat material so the depth buffer gets populated,
+    // and patch the shader's discard threshold so ghost-alpha halos don't poison
+    // the depth buffer and create rogue in-focus orbs.
     if (viewer.splatMesh && viewer.splatMesh.material) {
       viewer.splatMesh.material.depthWrite = true;
+      patchSplatShaderForDOF();
+      setSplatDepthAlphaThreshold(settings.dofAlphaThreshold);
       viewer.splatMesh.material.needsUpdate = true;
     }
     // Override viewer.render to inject the post-pass
@@ -1109,9 +1144,11 @@ function setDOFEnabled(enabled) {
       };
     }
   } else {
-    // Restore depthWrite default and original render
+    // Restore depthWrite default and the original (very low) discard threshold
+    // so soft splat halos look correct again.
     if (viewer.splatMesh && viewer.splatMesh.material) {
       viewer.splatMesh.material.depthWrite = false;
+      setSplatDepthAlphaThreshold(1.0 / 255.0);
       viewer.splatMesh.material.needsUpdate = true;
     }
     if (_origViewerRender) {
@@ -1885,6 +1922,10 @@ function bindDofSlider(id, valId, key, fmt) {
 bindDofSlider('sl-aperture',   'v-aperture',   'aperture',      v => 'f/' + v.toFixed(1));
 bindDofSlider('sl-focus-dist', 'v-focus-dist', 'focusDistance', v => v.toFixed(1));
 bindDofSlider('sl-max-blur',   'v-max-blur',   'maxBlur',       v => v.toFixed(3));
+bindDofSlider('sl-dof-alpha',  'v-dof-alpha',  'dofAlphaThreshold', v => v.toFixed(3));
+document.getElementById('sl-dof-alpha').addEventListener('input', () => {
+  if (settings.dofEnabled) setSplatDepthAlphaThreshold(settings.dofAlphaThreshold);
+});
 
 document.getElementById('btn-dof-toggle').addEventListener('click', () => {
   setDOFEnabled(!settings.dofEnabled);
