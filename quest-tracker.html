@@ -74,6 +74,11 @@ h1 { color: #9cf; font-size: 18px; font-weight: normal; letter-spacing: 2px; }
   <input type="checkbox" id="smoothing-cb" checked>
   Smoothing (low-pass jitter filter)
 </label>
+<label style="color:#888;font-size:11px;display:flex;align-items:center;gap:8px;width:100%;max-width:420px;">
+  Strength
+  <input type="range" id="smoothing-strength" min="0.03" max="0.6" step="0.01" value="0.15" style="flex:1;">
+  <span id="smoothing-val" style="font-variant-numeric:tabular-nums;">0.15</span>
+</label>
 
 <div class="card">
   <div class="label">Controller Pose</div>
@@ -332,9 +337,17 @@ function onXRFrame(time, frame) {
 
 // ── Smoothing (low-pass lerp/slerp on pose stream) ───────────────────────────
 
-const SMOOTH_ALPHA = 0.35;
-let smoothPos = null;   // {x, y, z}
-let smoothQuat = null;  // {x, y, z, w}
+let SMOOTH_ALPHA = 0.15;  // smaller = heavier filtering (more lag, less jitter)
+let smoothPos = null;
+let smoothQuat = null;
+
+const smoothingStrength = document.getElementById('smoothing-strength');
+if (smoothingStrength) {
+  smoothingStrength.addEventListener('input', () => {
+    SMOOTH_ALPHA = parseFloat(smoothingStrength.value);
+    document.getElementById('smoothing-val').textContent = SMOOTH_ALPHA.toFixed(2);
+  });
+}
 
 function resetSmoothing() { smoothPos = null; smoothQuat = null; }
 

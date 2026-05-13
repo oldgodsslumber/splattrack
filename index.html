@@ -503,6 +503,10 @@ hr { border: none; border-top: 1px solid #222; margin: 2px 0; }
         <span><span class="dot gray" id="tracker-dot"></span><span id="tracker-status">None</span></span>
       </div>
 
+      <div id="tracker-debug" style="font-size:9px;color:#666;line-height:1.5;font-variant-numeric:tabular-nums;padding:3px 0;display:none;">
+        Δpos —<br>Δrot —<br>raw —
+      </div>
+
       <div class="row" style="gap:10px;">
         <label style="flex:0 0 auto;">Apply</label>
         <label style="display:flex;align-items:center;gap:4px;color:#aaa;cursor:pointer;flex:1;">
@@ -1420,6 +1424,36 @@ function easeInOut(t) {
 //  Tracker
 // ────────────────────────────────────────────────────────────────────────────
 
+// Throttled live debug readout of what the viewer is actually receiving.
+// Helps diagnose whether wild camera motion comes from noisy pose, high scale,
+// or downstream math: if Δpos meters jitter ±0.1 with controller still, the
+// pose itself is noisy (Quest SLAM problem). If Δpos is steady but the camera
+// is flying, posScale is wrong.
+let _trackerDebugLast = 0;
+function updateTrackerDebug(pose) {
+  const now = performance.now();
+  if (now - _trackerDebugLast < 100) return;  // 10Hz
+  _trackerDebugLast = now;
+  const el = document.getElementById('tracker-debug');
+  if (!el) return;
+  el.style.display = '';
+  const o = tracker.origin;
+  if (o) {
+    const dx = (pose.px - o.px), dy = (pose.py - o.py), dz = (pose.pz - o.pz);
+    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    const oq = new THREE.Quaternion(o.qx, o.qy, o.qz, o.qw);
+    const cq = new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw);
+    const dq = cq.clone().multiply(oq.invert());
+    const angDeg = 2 * Math.acos(Math.min(1, Math.max(-1, dq.w))) * 180 / Math.PI;
+    el.innerHTML =
+      `Δpos ${dx.toFixed(3)} ${dy.toFixed(3)} ${dz.toFixed(3)} m (|${dist.toFixed(3)}|)<br>` +
+      `Δrot ${angDeg.toFixed(1)}°<br>` +
+      `scale pos×${settings.posScale.toFixed(2)} rot×${settings.rotScale.toFixed(2)}`;
+  } else {
+    el.innerHTML = `raw ${pose.px.toFixed(3)} ${pose.py.toFixed(3)} ${pose.pz.toFixed(3)} m`;
+  }
+}
+
 function zeroTracker() {
   if (!tracker.lastPose || !viewer) return;
   tracker.origin  = { ...tracker.lastPose };
@@ -1443,6 +1477,7 @@ function zeroTracker() {
 function applyTrackerPose(pose) {
   tracker.lastPose = pose;
   setTrackerStatus(true, pose.source || 'tracker');
+  updateTrackerDebug(pose);
   if (!tracker.enabled || !viewer) return;
   if (!tracker.origin) { zeroTracker(); return; }
 
