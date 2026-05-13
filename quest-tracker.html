@@ -89,10 +89,10 @@ h1 { color: #9cf; font-size: 18px; font-weight: normal; letter-spacing: 2px; }
 
 <div class="note">
   Open this page in the Quest browser.<br>
-  Mount a Touch controller on your camera rig,<br>
+  Mount the <strong>headset itself</strong> on your camera rig,<br>
   then tap <strong>Start XR Tracking</strong>.<br><br>
-  The Quest headset must be nearby with cameras active.<br>
-  Controller range: ~3–4m, within headset FOV.
+  The headset's own 6DOF pose drives the viewer camera.<br>
+  Hold the right controller to use the A button for Recenter.
 </div>
 
 <div id="session-display" style="font-size:11px;color:#888;margin-top:4px;"></div>
@@ -305,34 +305,27 @@ function onXRFrame(time, frame) {
     xrGL.clear(xrGL.COLOR_BUFFER_BIT | xrGL.DEPTH_BUFFER_BIT);
   }
 
+  // The right controller is no longer the pose source — we use the headset's
+  // own viewer pose. But we still listen for its A button as a remote
+  // Recenter trigger (the operator holds the controller while the headset
+  // is mounted on the rig).
   const inputSources = [...xrSession.inputSources];
-
-  // Right controller only. No fallback — left controller battery-dead poses
-  // and stray transient input sources will be ignored.
-  activeController = inputSources.find(s => s.handedness === 'right') || null;
-
-  // A-button edge-detect → recenter (gamepad button index 4 on right Touch)
-  const aBtn = activeController?.gamepad?.buttons?.[4]?.pressed ?? false;
+  const rightController = inputSources.find(s => s.handedness === 'right') || null;
+  activeController = rightController; // kept for pose-display "source" line
+  const aBtn = rightController?.gamepad?.buttons?.[4]?.pressed ?? false;
   if (aBtn && !aButtonPrev) sendRecenter();
   aButtonPrev = aBtn;
 
-  if (!activeController || !activeController.gripSpace) {
-    // No controller in view of the headset cameras. Do NOT fall back to the
-    // headset pose — for a camera-rig setup, headset motion is noise we want
-    // to ignore (headset may be held in hand, sitting on a desk, etc.).
-    updatePoseDisplay(null, null, 'No controller — point headset cameras at it');
+  // Pose source: the headset itself. getViewerPose gives 6DOF of the head in
+  // local-floor space — exactly what we want when the Quest is rigged onto a
+  // camera.
+  const viewerPose = frame.getViewerPose(xrRefSpace);
+  if (!viewerPose) {
+    updatePoseDisplay(null, null, 'Headset pose unavailable');
     return;
   }
-
-  // Get controller grip pose
-  const gripPose = frame.getPose(activeController.gripSpace, xrRefSpace);
-  if (!gripPose) {
-    updatePoseDisplay(null, null, 'Controller registered but pose unavailable');
-    return;
-  }
-
-  sendControllerPose(gripPose, activeController.handedness);
-  updatePoseDisplay(gripPose, null);
+  sendHeadsetPose(viewerPose);
+  updatePoseDisplay(null, viewerPose);
 }
 
 // ── Smoothing (low-pass lerp/slerp on pose stream) ───────────────────────────
@@ -436,7 +429,7 @@ function updatePoseDisplay(controllerPose, viewerPose, status) {
   const p = pose.transform.position;
   const q = pose.transform.orientation;
   document.getElementById('pose-display').innerHTML =
-    `source: ${activeController ? activeController.handedness : 'headset'}<br>` +
+    `source: headset<br>` +
     `pos  X ${p.x.toFixed(3)}  Y ${p.y.toFixed(3)}  Z ${p.z.toFixed(3)}<br>` +
     `quat X ${q.x.toFixed(3)}  Y ${q.y.toFixed(3)}  Z ${q.z.toFixed(3)}  W ${q.w.toFixed(3)}`;
 }
