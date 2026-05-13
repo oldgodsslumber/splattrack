@@ -1112,12 +1112,21 @@ function patchSplatShaderForDOF() {
   const m = mesh.material;
   if (m.userData._dofPatched) return;
   if (typeof m.fragmentShader !== 'string') return;
-  const needle = 'alpha < 1.0f / 255.0f';
-  if (!m.fragmentShader.includes(needle)) return;
-  m.fragmentShader = m.fragmentShader.replace(needle, 'alpha < uDepthAlphaThreshold');
+  // Match the live shader line (with the trailing `discard;`) so we don't
+  // accidentally patch the pseudocode in the surrounding comment block.
+  const needle = 'alpha < 1.0f / 255.0f) discard;';
+  if (!m.fragmentShader.includes(needle)) {
+    console.warn('[DOF] could not find splat discard line — shader patch skipped');
+    return;
+  }
+  m.fragmentShader = m.fragmentShader.replace(
+    needle,
+    'alpha < uDepthAlphaThreshold) discard;'
+  );
   m.uniforms.uDepthAlphaThreshold = { value: 1.0 / 255.0 };
   m.userData._dofPatched = true;
   m.needsUpdate = true;
+  console.log('[DOF] splat fragment shader patched with depth alpha threshold uniform');
 }
 
 function setSplatDepthAlphaThreshold(v) {
