@@ -302,10 +302,9 @@ function onXRFrame(time, frame) {
 
   const inputSources = [...xrSession.inputSources];
 
-  // Prefer right-hand controller, fallback to any
-  activeController = inputSources.find(s => s.handedness === 'right')
-    || inputSources.find(s => s.handedness === 'left')
-    || inputSources[0];
+  // Right controller only. No fallback — left controller battery-dead poses
+  // and stray transient input sources will be ignored.
+  activeController = inputSources.find(s => s.handedness === 'right') || null;
 
   // A-button edge-detect → recenter (gamepad button index 4 on right Touch)
   const aBtn = activeController?.gamepad?.buttons?.[4]?.pressed ?? false;
