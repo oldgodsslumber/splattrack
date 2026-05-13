@@ -740,12 +740,15 @@ function initViewer() {
 
   const viewport = document.getElementById('viewport');
 
+  // GitHub Pages can't set COOP/COEP headers, so SharedArrayBuffer is unavailable.
+  // Detect via crossOriginIsolated and fall back to non-shared workers when needed.
   viewer = new GS3D.Viewer({
     rootElement: viewport,
     cameraUp: [0, 1, 0],
     initialCameraPosition: [0, -2, 8],
     initialCameraLookAt: [0, 0, 0],
     sphericalHarmonicsDegree: 0,
+    sharedMemoryForWorkers: !!window.crossOriginIsolated,
   });
 
   const camera = viewer.camera;
