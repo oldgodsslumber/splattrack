@@ -506,7 +506,7 @@ hr { border: none; border-top: 1px solid #222; margin: 2px 0; }
       <div class="row" style="gap:10px;">
         <label style="flex:0 0 auto;">Apply</label>
         <label style="display:flex;align-items:center;gap:4px;color:#aaa;cursor:pointer;flex:1;">
-          <input type="checkbox" id="cb-tracker-pos">
+          <input type="checkbox" id="cb-tracker-pos" checked>
           <span>Position</span>
         </label>
         <label style="display:flex;align-items:center;gap:4px;color:#aaa;cursor:pointer;flex:1;">
@@ -648,7 +648,7 @@ const settings = {
   maxBlur: 0.01,
   dofAlphaThreshold: 0.05,
   // Tracker channel gates
-  trackerApplyPosition: false,  // off by default since iOS Safari can't do 6DOF
+  trackerApplyPosition: true,   // Quest 3 controller streams full 6DOF
   trackerApplyRotation: true,
 };
 
@@ -1415,10 +1415,20 @@ function zeroTracker() {
   if (!tracker.lastPose || !viewer) return;
   tracker.origin  = { ...tracker.lastPose };
   tracker.camBase = {
-    position:  viewer.camera.position.clone(),
+    position:   viewer.camera.position.clone(),
     quaternion: viewer.camera.quaternion.clone(),
   };
-  if (orbitControls) orbitControls.target.set(0, 0, 0);
+  // Keep the orbit pivot in front of the camera so OrbitControls doesn't
+  // re-aim the view at the world origin and overwrite the base orientation
+  // we just captured. The pivot distance is the current distance to the
+  // existing target, falling back to 5m if it was at the camera.
+  if (orbitControls) {
+    const cam = viewer.camera;
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
+    const dist = Math.max(0.5, cam.position.distanceTo(orbitControls.target));
+    orbitControls.target.copy(cam.position).addScaledVector(fwd, dist);
+    orbitControls.update();
+  }
 }
 
 function applyTrackerPose(pose) {
