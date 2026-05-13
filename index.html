@@ -690,6 +690,36 @@ if (IS_PROJECTOR) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+//  Relay mode + session code (must run before any link/UI code that depends on it)
+// ────────────────────────────────────────────────────────────────────────────
+
+function isLanHost(host) {
+  return host === 'localhost' || host === '127.0.0.1'
+    || /^192\.168\./.test(host) || /^10\./.test(host)
+    || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host);
+}
+const USE_FIREBASE = !isLanHost(location.hostname);
+
+function randomCode() {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 4; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return s;
+}
+function parseHashCode() {
+  const m = (location.hash || '').match(/[#&]s=([A-Za-z0-9]+)/);
+  return m ? m[1].toUpperCase() : null;
+}
+
+let SESSION = null;
+if (USE_FIREBASE) {
+  SESSION = parseHashCode() || sessionStorage.getItem('splattrack_session') || randomCode();
+  sessionStorage.setItem('splattrack_session', SESSION);
+  if (parseHashCode() !== SESSION) location.hash = `s=${SESSION}`;
+  window.SPLATTRACK_SESSION = SESSION;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 //  Link generation for tracker pages
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1652,35 +1682,6 @@ function updateGamepad() {
 // ────────────────────────────────────────────────────────────────────────────
 
 let ws = null;
-
-// Relay mode: LAN (WebSocket via Node server) on private hosts,
-// Firebase RTDB elsewhere (GitHub Pages, custom domain, etc.).
-function isLanHost(host) {
-  return host === 'localhost' || host === '127.0.0.1'
-    || /^192\.168\./.test(host) || /^10\./.test(host)
-    || /^172\.(1[6-9]|2[0-9]|3[01])\./.test(host);
-}
-const USE_FIREBASE = !isLanHost(location.hostname);
-
-function randomCode() {
-  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
-  let s = '';
-  for (let i = 0; i < 4; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return s;
-}
-
-function parseHashCode() {
-  const m = (location.hash || '').match(/[#&]s=([A-Za-z0-9]+)/);
-  return m ? m[1].toUpperCase() : null;
-}
-
-let SESSION = null;
-if (USE_FIREBASE) {
-  SESSION = parseHashCode() || sessionStorage.getItem('splattrack_session') || randomCode();
-  sessionStorage.setItem('splattrack_session', SESSION);
-  if (parseHashCode() !== SESSION) location.hash = `s=${SESSION}`;
-  window.SPLATTRACK_SESSION = SESSION;
-}
 
 function wsConnect() {
   const role = IS_PROJECTOR ? 'viewer' : 'controller';
