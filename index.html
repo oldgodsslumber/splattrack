@@ -1,0 +1,2179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SplatTrack</title>
+
+<!-- Import map — resolved from local node_modules (works offline) -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js",
+    "three/addons/": "/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0d0d0d;
+  color: #ccc;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ── Layout ── */
+#app { display: flex; width: 100vw; height: 100vh; }
+
+#panel {
+  width: 268px;
+  min-width: 268px;
+  background: #141414;
+  border-right: 1px solid #2a2a2a;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: #333 #141414;
+}
+#panel::-webkit-scrollbar { width: 4px; }
+#panel::-webkit-scrollbar-track { background: #141414; }
+#panel::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+#viewport {
+  flex: 1;
+  position: relative;
+  background: #000;
+  overflow: hidden;
+}
+
+/* GaussianSplats3D attaches its canvas here */
+#viewport canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── Projector mode ── */
+body.projector #panel { display: none; }
+body.projector #viewport { width: 100vw; }
+body.projector #status-bar { display: none; }
+
+/* ── Fullscreen: hide panel, viewport fills screen ── */
+:fullscreen #panel,
+:-webkit-full-screen #panel { display: none; }
+:fullscreen #status-bar,
+:-webkit-full-screen #status-bar { display: none; }
+
+/* ── UI Components ── */
+.section {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.section-title {
+  color: #666;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 7px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 5px 0;
+  gap: 6px;
+}
+
+.row label {
+  color: #888;
+  font-size: 11px;
+  white-space: nowrap;
+  min-width: 72px;
+}
+
+.row input[type="range"] {
+  flex: 1;
+  height: 3px;
+  accent-color: #4a8adf;
+  cursor: pointer;
+}
+
+.row select {
+  flex: 1;
+  background: #222;
+  border: 1px solid #3a3a3a;
+  color: #ccc;
+  padding: 3px 4px;
+  font-family: inherit;
+  font-size: 11px;
+  border-radius: 2px;
+}
+
+.val {
+  color: #5af;
+  font-size: 11px;
+  min-width: 38px;
+  text-align: right;
+}
+
+.btn {
+  background: #222;
+  border: 1px solid #3a3a3a;
+  color: #aaa;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  border-radius: 2px;
+  transition: background 0.1s;
+}
+.btn:hover { background: #2d2d2d; color: #ddd; }
+.btn.primary { background: #1a3d6a; border-color: #2a5a9a; color: #9cf; }
+.btn.primary:hover { background: #1f4a80; }
+.btn.active { background: #1a4a2a; border-color: #2a7a3a; color: #6fa; }
+.btn.danger { background: #3a1a1a; border-color: #6a2a2a; color: #f88; }
+
+#drop-zone {
+  border: 2px dashed #333;
+  border-radius: 4px;
+  padding: 14px 8px;
+  text-align: center;
+  color: #555;
+  cursor: pointer;
+  transition: all 0.15s;
+  line-height: 1.4;
+}
+#drop-zone:hover { border-color: #555; color: #888; }
+#drop-zone.drag-over { border-color: #4a8adf; color: #9cf; background: #111; }
+#drop-zone.loaded { border-color: #2a6a3a; color: #6fa; border-style: solid; background: #0f1a0f; }
+
+#scene-name {
+  color: #5af;
+  font-size: 10px;
+  text-align: center;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.pslot {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  color: #555;
+  padding: 6px 2px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 10px;
+  text-align: center;
+  border-radius: 2px;
+  transition: all 0.1s;
+}
+.pslot:hover { background: #222; }
+.pslot.saved { color: #9cf; border-color: #2a4a6a; }
+.pslot.active-slot { border-color: #4a8adf; background: #1a2a3a; }
+.pslot .slot-key { font-size: 13px; font-weight: bold; }
+.pslot .slot-label { font-size: 9px; margin-top: 2px; color: #666; }
+.pslot.saved .slot-label { color: #5af; }
+
+.dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.dot.green { background: #3a3; }
+.dot.yellow { background: #aa3; }
+.dot.red { background: #a33; }
+.dot.gray { background: #444; }
+
+#status-bar {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  padding: 3px 8px;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  gap: 14px;
+  font-size: 10px;
+  color: #555;
+  pointer-events: none;
+}
+#status-bar span { color: #666; }
+#status-bar .hi { color: #5af; }
+
+#loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #888;
+  font-size: 14px;
+}
+#loading-overlay.visible { display: flex; }
+#loading-bar-wrap {
+  width: 200px; height: 3px;
+  background: #222; border-radius: 2px;
+}
+#loading-bar {
+  height: 100%;
+  background: #4a8adf;
+  border-radius: 2px;
+  width: 0%;
+  transition: width 0.1s;
+}
+
+#safe-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: none;
+}
+
+#no-scene {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #333;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.link { color: #4a7acc; cursor: pointer; text-decoration: underline; font-size: 10px; }
+
+.kbd {
+  background: #2a2a2a;
+  border: 1px solid #444;
+  border-radius: 2px;
+  padding: 0 3px;
+  font-size: 10px;
+  color: #888;
+}
+
+hr { border: none; border-top: 1px solid #222; margin: 2px 0; }
+</style>
+</head>
+
+<body>
+<div id="app">
+
+  <!-- ── Control Panel ─────────────────────────── -->
+  <div id="panel">
+
+    <!-- Scene load -->
+    <div class="section">
+      <div class="section-title">Scene</div>
+
+      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div>Drop .splat / .ply / .spz</div>
+        <div style="font-size:10px;margin-top:3px;color:#444">or click to browse</div>
+        <input type="file" id="file-input" accept=".splat,.ply,.spz,.ksplat" style="display:none">
+      </div>
+      <div id="scene-name"></div>
+
+      <div class="row" style="margin-top:6px;">
+        <label>Server scene</label>
+        <select id="scene-select" style="font-size:10px;">
+          <option value="">— select —</option>
+        </select>
+      </div>
+      <button class="btn" id="btn-load-server" style="width:100%;margin-top:4px;">Load Selected</button>
+
+      <div style="display:flex;gap:4px;margin-top:6px;">
+        <button class="btn" id="btn-save-start" style="flex:1;" title="Save current camera + calibration as the default start view for this scene">Save Start</button>
+        <button class="btn" id="btn-reset-start" style="flex:1;" title="Snap camera back to the saved start view">Reset to Start</button>
+        <button class="btn" id="btn-clear-start" style="flex:0 0 auto;" title="Clear saved start view for this scene">✕</button>
+      </div>
+      <div id="start-saved-status" style="font-size:9px;color:#666;text-align:center;margin-top:3px;"></div>
+    </div>
+
+    <!-- Image -->
+    <div class="section">
+      <div class="section-title">Image</div>
+
+      <div class="row">
+        <label>Exposure</label>
+        <input type="range" id="sl-exposure" min="-2" max="2" step="0.05" value="0">
+        <span class="val" id="v-exposure">0.0</span>
+      </div>
+      <div class="row">
+        <label>Contrast</label>
+        <input type="range" id="sl-contrast" min="0.5" max="2" step="0.05" value="1">
+        <span class="val" id="v-contrast">1.0</span>
+      </div>
+      <div class="row">
+        <label>Saturation</label>
+        <input type="range" id="sl-saturation" min="0" max="2.5" step="0.05" value="1">
+        <span class="val" id="v-saturation">1.0</span>
+      </div>
+      <div class="row">
+        <label>Color Temp</label>
+        <input type="range" id="sl-colortemp" min="-50" max="50" step="1" value="0">
+        <span class="val" id="v-colortemp">0</span>
+      </div>
+    </div>
+
+    <!-- Lens -->
+    <div class="section">
+      <div class="section-title">Lens</div>
+
+      <div class="row">
+        <label>Preset</label>
+        <select id="lens-preset">
+          <option value="">— custom —</option>
+          <option value="81.2">14mm (81.2°)</option>
+          <option value="62.0">20mm (62.0°)</option>
+          <option value="53.1">24mm (53.1°)</option>
+          <option value="46.4">28mm (46.4°)</option>
+          <option value="37.8">35mm (37.8°)</option>
+          <option value="27.0">50mm (27.0°)</option>
+          <option value="19.5">70mm (19.5°)</option>
+          <option value="16.1">85mm (16.1°)</option>
+          <option value="13.1">105mm (13.1°)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>V-FOV (°)</label>
+        <input type="range" id="sl-fov" min="5" max="110" step="0.5" value="60">
+        <span class="val" id="v-fov">60.0</span>
+      </div>
+      <div class="row">
+        <label>Focal (mm)</label>
+        <input type="number" id="num-focal" min="6" max="400" step="0.5" value="41.6"
+               style="flex:1;background:#222;border:1px solid #3a3a3a;color:#ccc;padding:3px 4px;font-family:inherit;font-size:11px;border-radius:2px;">
+        <span class="val" style="color:#666;">35mm-eq</span>
+      </div>
+      <div style="font-size:9px;color:#444;margin-top:2px;">
+        Full-frame 35mm vertical FOVs. Focal length and FOV are linked.
+      </div>
+    </div>
+
+    <!-- Depth of field -->
+    <div class="section">
+      <div class="section-title">Depth of Field</div>
+
+      <div class="row">
+        <label>Enable</label>
+        <button class="btn" id="btn-dof-toggle" style="flex:1;">Off</button>
+      </div>
+      <div class="row">
+        <label>Aperture (f)</label>
+        <input type="range" id="sl-aperture" min="0.7" max="22" step="0.1" value="2.8">
+        <span class="val" id="v-aperture">f/2.8</span>
+      </div>
+      <div class="row">
+        <label>Focus dist</label>
+        <input type="range" id="sl-focus-dist" min="0.1" max="200" step="0.1" value="5">
+        <span class="val" id="v-focus-dist">5.0</span>
+      </div>
+      <div class="row">
+        <label>Max blur</label>
+        <input type="range" id="sl-max-blur" min="0" max="0.05" step="0.001" value="0.01">
+        <span class="val" id="v-max-blur">0.010</span>
+      </div>
+      <button class="btn" id="btn-focus-here" style="width:100%;margin-top:4px;" title="Set focus distance to whatever the camera is currently looking at (orbit target)">Focus on Orbit Target</button>
+    </div>
+
+    <!-- Scene calibration -->
+    <div class="section">
+      <div class="section-title">Scene Calibration</div>
+
+      <div class="row">
+        <label>Tilt X</label>
+        <input type="range" id="sl-tilt" min="-180" max="180" step="0.5" value="0">
+        <span class="val" id="v-tilt">0°</span>
+      </div>
+      <div class="row">
+        <label>Rotate Y</label>
+        <input type="range" id="sl-rotate" min="-180" max="180" step="0.5" value="0">
+        <span class="val" id="v-rotate">0°</span>
+      </div>
+      <div class="row">
+        <label>Roll Z</label>
+        <input type="range" id="sl-roll" min="-180" max="180" step="0.5" value="0">
+        <span class="val" id="v-roll">0°</span>
+      </div>
+      <div class="row">
+        <label>Scale</label>
+        <input type="range" id="sl-scale" min="0.01" max="10" step="0.01" value="1">
+        <span class="val" id="v-scale">1.0</span>
+      </div>
+      <div class="row">
+        <label>Lift Y</label>
+        <input type="range" id="sl-lift" min="-20" max="20" step="0.1" value="0">
+        <span class="val" id="v-lift">0.0</span>
+      </div>
+      <button class="btn" id="btn-reset-cal" style="width:100%;margin-top:4px;">Reset Calibration</button>
+    </div>
+
+    <!-- Presets -->
+    <div class="section">
+      <div class="section-title">Camera Presets <span class="kbd">1</span><span class="kbd">2</span><span class="kbd">3</span><span class="kbd">4</span></div>
+
+      <div class="preset-grid" id="preset-grid">
+        <div class="pslot" data-slot="0" onclick="recallPreset(0)">
+          <div class="slot-key">1</div>
+          <div class="slot-label">Empty</div>
+        </div>
+        <div class="pslot" data-slot="1" onclick="recallPreset(1)">
+          <div class="slot-key">2</div>
+          <div class="slot-label">Empty</div>
+        </div>
+        <div class="pslot" data-slot="2" onclick="recallPreset(2)">
+          <div class="slot-key">3</div>
+          <div class="slot-label">Empty</div>
+        </div>
+        <div class="pslot" data-slot="3" onclick="recallPreset(3)">
+          <div class="slot-key">4</div>
+          <div class="slot-label">Empty</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <label>Save to</label>
+        <select id="preset-save-slot">
+          <option value="0">Slot 1</option>
+          <option value="1">Slot 2</option>
+          <option value="2">Slot 3</option>
+          <option value="3">Slot 4</option>
+        </select>
+        <button class="btn" id="btn-save-preset" style="min-width:50px;">Save</button>
+      </div>
+
+      <div class="row">
+        <label>Transition</label>
+        <input type="range" id="sl-transition" min="0" max="4" step="0.1" value="1">
+        <span class="val" id="v-transition">1.0s</span>
+      </div>
+    </div>
+
+    <!-- Tracker -->
+    <div class="section">
+      <div class="section-title">Tracker</div>
+
+      <div class="row">
+        <label>Status</label>
+        <span><span class="dot gray" id="tracker-dot"></span><span id="tracker-status">None</span></span>
+      </div>
+
+      <div class="row" style="gap:10px;">
+        <label style="flex:0 0 auto;">Apply</label>
+        <label style="display:flex;align-items:center;gap:4px;color:#aaa;cursor:pointer;flex:1;">
+          <input type="checkbox" id="cb-tracker-pos">
+          <span>Position</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;color:#aaa;cursor:pointer;flex:1;">
+          <input type="checkbox" id="cb-tracker-rot" checked>
+          <span>Rotation</span>
+        </label>
+      </div>
+      <div class="row">
+        <label>Pos scale</label>
+        <input type="range" id="sl-pos-scale" min="0" max="500" step="0.5" value="1">
+        <span class="val" id="v-pos-scale">1.0</span>
+      </div>
+      <div class="row">
+        <label>Rot scale</label>
+        <input type="range" id="sl-rot-scale" min="0" max="3" step="0.05" value="1">
+        <span class="val" id="v-rot-scale">1.0</span>
+      </div>
+
+      <div style="display:flex;gap:4px;margin-top:4px;">
+        <button class="btn" id="btn-zero-tracker" style="flex:1;">Zero Origin</button>
+        <button class="btn" id="btn-toggle-tracker" style="flex:1;">Enable</button>
+        <button class="btn" id="btn-auto-pos-scale" style="flex:1;" title="Auto-set Pos scale based on the current scene's size">Auto Scale</button>
+      </div>
+
+      <div style="margin-top:7px;font-size:10px;color:#888;">Two-marker calibration</div>
+      <div style="display:flex;gap:4px;margin-top:2px;align-items:center;">
+        <button class="btn" id="btn-mark-a" style="flex:1;" title="Drop marker A at the current orbit target">Mark A</button>
+        <button class="btn" id="btn-mark-b" style="flex:1;" title="Drop marker B at the current orbit target">Mark B</button>
+        <input type="number" id="calib-meters" step="0.01" min="0" placeholder="m" style="width:54px;font-size:11px;padding:4px;background:#0b0b0b;border:1px solid #2a2a2a;color:#ccc;">
+        <button class="btn" id="btn-calib-apply" style="flex:0 0 auto;" disabled>Apply</button>
+        <button class="btn" id="btn-calib-clear" style="flex:0 0 auto;" title="Clear markers">✕</button>
+      </div>
+      <div id="calib-status" style="font-size:10px;color:#666;margin-top:3px;min-height:12px;"></div>
+      <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:6px;margin-top:3px;cursor:pointer;">
+        <input type="checkbox" id="cb-ref-cube"> Show 1m reference cube at orbit target
+      </label>
+
+      <hr style="margin:7px 0;">
+      <div style="font-size:10px;color:#555;line-height:1.7;">
+        <div>Quest: <span id="quest-link" class="link">open in Quest browser</span></div>
+        <div>OpenTrack: UDP → port 4242</div>
+        <div>Gamepad: auto-detected</div>
+        <div id="gamepad-status" style="color:#666;"></div>
+      </div>
+    </div>
+
+    <!-- Output -->
+    <div class="section">
+      <div class="section-title">Output</div>
+
+      <div class="row">
+        <label>Pixel ratio</label>
+        <select id="pixel-ratio">
+          <option value="1">1× performance</option>
+          <option value="1.5">1.5×</option>
+          <option value="2" selected>2× sharp</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label>Safe area</label>
+        <button class="btn" id="btn-safe-area">Show</button>
+      </div>
+
+      <button class="btn primary" id="btn-fullscreen" style="width:100%;margin-top:6px;">
+        ⛶ &nbsp;Project <span class="kbd" style="background:transparent;border-color:#2a4a7a;">F11</span>
+      </button>
+
+      <div style="font-size:9px;color:#444;margin-top:6px;line-height:1.5;">
+        Projector tab: <a href="?projector" target="_blank" class="link">open ?projector</a>
+      </div>
+    </div>
+
+  </div><!-- end #panel -->
+
+  <!-- ── Viewport ─────────────────────────────── -->
+  <div id="viewport">
+    <div id="no-scene">Drop a .splat file to begin</div>
+
+    <canvas id="safe-canvas"></canvas>
+
+    <div id="loading-overlay">
+      <div id="loading-text">Loading scene…</div>
+      <div id="loading-bar-wrap"><div id="loading-bar"></div></div>
+    </div>
+
+    <div id="status-bar">
+      <span id="st-fps" class="hi">— fps</span>
+      <span id="st-cam">cam —</span>
+      <span id="st-fov">FOV —</span>
+      <span id="st-tracker"></span>
+    </div>
+  </div>
+
+</div><!-- end #app -->
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { Pass } from 'three/addons/postprocessing/Pass.js';
+import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+import * as GS3D from '/node_modules/@mkkellogg/gaussian-splats-3d/build/gaussian-splats-3d.module.js';
+
+// ────────────────────────────────────────────────────────────────────────────
+//  State
+// ────────────────────────────────────────────────────────────────────────────
+
+const IS_PROJECTOR = new URLSearchParams(location.search).has('projector');
+
+let viewer = null;
+let orbitControls = null;
+let rafId = null;
+let sceneLoaded = false;
+
+const settings = {
+  exposure: 0,
+  contrast: 1,
+  saturation: 1,
+  colortemp: 0,
+  fov: 60,
+  tilt: 0,  // scene rotation degrees
+  rotate: 0,
+  roll: 0,
+  scale: 1,
+  lift: 0,
+  transitionSec: 1,
+  pixelRatio: 2,
+  posScale: 1,
+  rotScale: 1,
+  // Depth of field
+  dofEnabled: false,
+  aperture: 2.8,
+  focusDistance: 5,
+  maxBlur: 0.01,
+  // Tracker channel gates
+  trackerApplyPosition: false,  // off by default since iOS Safari can't do 6DOF
+  trackerApplyRotation: true,
+};
+
+const presets = [null, null, null, null];
+
+// Tracker state
+const tracker = {
+  enabled: false,
+  connected: false,
+  origin: null,       // { px,py,pz, qx,qy,qz,qw } — zeroed when user clicks "Zero"
+  camBase: null,      // { position, quaternion } — camera at zero time
+  lastPose: null,     // latest raw pose from device
+};
+window.tracker = tracker; // expose for debugging
+
+// Smooth transition
+const transition = {
+  active: false,
+  fromPos: new THREE.Vector3(),
+  fromQuat: new THREE.Quaternion(),
+  toPos: new THREE.Vector3(),
+  toQuat: new THREE.Quaternion(),
+  progress: 0,
+  duration: 1,
+};
+
+// FPS counter
+let lastFpsTime = performance.now();
+let frameCount = 0;
+let fps = 0;
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Apply projector mode
+// ────────────────────────────────────────────────────────────────────────────
+
+if (IS_PROJECTOR) {
+  document.body.classList.add('projector');
+  document.title = 'SplatTrack — Projector';
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Link generation for tracker pages
+// ────────────────────────────────────────────────────────────────────────────
+
+const networkBase = `${location.protocol}//${location.hostname}:${location.port}`;
+document.getElementById('quest-link').onclick = () =>
+  window.open(`${networkBase}/quest-tracker.html`, '_blank');
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Server scene list
+// ────────────────────────────────────────────────────────────────────────────
+
+async function refreshSceneList() {
+  try {
+    const files = await fetch('/api/scenes').then(r => r.json());
+    const sel = document.getElementById('scene-select');
+    sel.innerHTML = '<option value="">— select —</option>';
+    files.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = `/scenes/${encodeURIComponent(f)}`;
+      opt.textContent = f;
+      sel.appendChild(opt);
+    });
+  } catch { /* server not ready */ }
+}
+refreshSceneList();
+
+// ────────────────────────────────────────────────────────────────────────────
+//  GaussianSplats3D viewer initialisation
+// ────────────────────────────────────────────────────────────────────────────
+
+function initViewer() {
+  if (viewer) return;
+
+  const viewport = document.getElementById('viewport');
+
+  viewer = new GS3D.Viewer({
+    rootElement: viewport,
+    cameraUp: [0, 1, 0],
+    initialCameraPosition: [0, -2, 8],
+    initialCameraLookAt: [0, 0, 0],
+    sphericalHarmonicsDegree: 0,
+  });
+
+  const camera = viewer.camera;
+  const renderer = viewer.renderer;
+
+  window.viewer = viewer;
+  window.THREE = THREE;
+
+  renderer.setPixelRatio(settings.pixelRatio);
+
+  // Disable click-to-recenter — preserves orbit/drag but prevents the camera
+  // jumping to whatever splat you happened to click on.
+  viewer.onMouseClick = () => {};
+
+  // The viewer creates its own OrbitControls (useBuiltInControls defaults to true);
+  // hold onto it for our overrides + WASD logic.
+  orbitControls = viewer.controls;
+  window.orbitControls = orbitControls;
+  if (orbitControls) {
+    orbitControls.enableDamping = true;
+    orbitControls.dampingFactor = 0.06;
+    orbitControls.panSpeed = 0.8;
+    orbitControls.zoomSpeed = 0.8;
+    orbitControls.minDistance = 0.1;
+    orbitControls.maxDistance = 500;
+    // Disable right-click pan; right-drag will be handled below as FPS look.
+    if (orbitControls.mouseButtons) orbitControls.mouseButtons.RIGHT = -1;
+  }
+
+  setupFpsLook(viewer.renderer.domElement);
+
+  applyFov();
+
+  // Resize: only used to redraw the safe-area overlay; the viewer handles its own.
+  const ro = new ResizeObserver(() => drawSafeArea());
+  ro.observe(viewport);
+
+  startLoop();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Animation loop
+// ────────────────────────────────────────────────────────────────────────────
+
+// UI side-loop — runs alongside the viewer's self-driven render loop.
+// Handles FPS readout, transitions, gamepad, WASD, and status bar.
+function startLoop() {
+  if (rafId) return;
+  const loop = () => {
+    rafId = requestAnimationFrame(loop);
+
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsTime >= 1000) {
+      fps = frameCount;
+      frameCount = 0;
+      lastFpsTime = now;
+      document.getElementById('st-fps').textContent = `${fps} fps`;
+    }
+
+    updateTransition();
+    updateGamepad();
+    updateKeyboardFly();
+    updateRefCube();
+
+    updateStatusBar();
+  };
+  loop();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Scene loading
+// ────────────────────────────────────────────────────────────────────────────
+
+async function loadScene(urlOrFile) {
+  initViewer();
+
+  const overlay = document.getElementById('loading-overlay');
+  const bar     = document.getElementById('loading-bar');
+  const txt     = document.getElementById('loading-text');
+  overlay.classList.add('visible');
+  bar.style.width = '0%';
+  txt.textContent = 'Loading scene…';
+  document.getElementById('no-scene').style.display = 'none';
+
+  let loadUrl, filename;
+
+  if (urlOrFile instanceof File) {
+    filename = urlOrFile.name;
+    loadUrl  = URL.createObjectURL(urlOrFile);
+  } else {
+    loadUrl  = urlOrFile;
+    filename = decodeURIComponent(urlOrFile.split('/').pop());
+  }
+
+  // Detect format from filename extension
+  const ext = filename.split('.').pop().toLowerCase();
+  const SF  = GS3D.SceneFormat || { Splat: 0, KSplat: 1, Ply: 2, Spz: 3 };
+  const formatMap = { splat: SF.Splat ?? 0, ksplat: SF.KSplat ?? 1, ply: SF.Ply ?? 2, spz: SF.Spz ?? 3 };
+  const format = formatMap[ext] ?? SF.Splat ?? 0;
+
+  // Unload previous scene
+  if (sceneLoaded) {
+    try { viewer.removeSplatScene(0); } catch {}
+    sceneLoaded = false;
+  }
+
+  try {
+    await viewer.addSplatScene(loadUrl, {
+      splatAlphaRemovalThreshold: 5,
+      showLoadingUI: false,
+      progressiveLoad: false,
+      format,
+      onProgress: (pct) => {
+        bar.style.width = `${Math.round(pct)}%`;
+        txt.textContent = `Loading… ${Math.round(pct)}%`;
+      },
+    });
+
+    sceneLoaded = true;
+    applySceneCalibration();
+    overlay.classList.remove('visible');
+
+    // Self-driven viewer needs an explicit start after first scene load
+    if (!viewer.selfDrivenModeRunning) {
+      try { viewer.start(); } catch {}
+    }
+
+    // Restore saved start view for this scene, or auto-frame if none saved.
+    if (!restoreStartView(filename)) autoFrameScene();
+    refreshStartSavedStatus(filename);
+
+    document.getElementById('drop-zone').classList.add('loaded');
+    document.getElementById('scene-name').textContent = filename;
+    currentSceneKey = filename;
+
+    // Sync to projector if we're the controller
+    if (!IS_PROJECTOR) {
+      wsSend({ type: 'scene_load', path: urlOrFile instanceof File ? null : loadUrl, filename });
+    }
+
+    // Auto-fullscreen in projector mode
+    if (IS_PROJECTOR && !document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+  } catch (err) {
+    overlay.classList.remove('visible');
+    txt.textContent = `Error: ${err.message}`;
+    console.error('[load]', err);
+    setTimeout(() => overlay.classList.remove('visible'), 3000);
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Image post-processing via CSS filters on the viewport
+// ────────────────────────────────────────────────────────────────────────────
+
+function applyFilters() {
+  const { exposure, contrast, saturation, colortemp } = settings;
+  const brightness = Math.pow(2, exposure); // exposure is in EV stops
+  const sepia  = colortemp > 0 ?  colortemp / 100 : 0;
+  const invert = colortemp < 0;
+  // Approximate "cool" (blue) with a slight hue-rotate + sepia trick
+  const hueShift = colortemp < 0 ? colortemp * 1.2 : 0;
+
+  let filter = `brightness(${brightness.toFixed(3)}) contrast(${contrast.toFixed(3)}) saturate(${saturation.toFixed(3)})`;
+  if (sepia > 0) filter += ` sepia(${sepia.toFixed(3)})`;
+  if (hueShift !== 0) filter += ` hue-rotate(${hueShift.toFixed(1)}deg)`;
+
+  document.getElementById('viewport').style.filter = filter;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  FOV
+// ────────────────────────────────────────────────────────────────────────────
+
+function applyFov() {
+  if (!viewer) return;
+  viewer.camera.fov = settings.fov;
+  viewer.camera.updateProjectionMatrix();
+  syncFocalFromFov();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Focal length ↔ FOV (35mm full-frame, vertical sensor = 24mm)
+// ────────────────────────────────────────────────────────────────────────────
+
+function fovToFocal(fovDeg) {
+  // V-FOV (deg) → focal length in mm, full-frame 24mm vertical
+  return 12 / Math.tan((fovDeg * Math.PI / 180) / 2);
+}
+
+function focalToFov(focalMm) {
+  return 2 * Math.atan(12 / focalMm) * (180 / Math.PI);
+}
+
+function syncFocalFromFov() {
+  const numEl = document.getElementById('num-focal');
+  if (!numEl || numEl === document.activeElement) return;
+  numEl.value = fovToFocal(settings.fov).toFixed(1);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Depth of field (post-process, depth-aware)
+//  Splats are rendered with depthWrite:false by default; we flip it to true
+//  after scene load so the depth buffer is populated. Mild blend artifacts
+//  in exchange for proper DOF.
+// ────────────────────────────────────────────────────────────────────────────
+
+let dofRT = null;          // WebGLRenderTarget with depth texture
+let dofQuad = null;        // FullScreenQuad-style mesh
+let dofMaterial = null;
+let _origViewerRender = null;
+
+function ensureDOF() {
+  if (dofRT) return;
+  const renderer = viewer.renderer;
+  const size = new THREE.Vector2();
+  renderer.getSize(size);
+  const dpr = renderer.getPixelRatio();
+  const w = Math.max(1, Math.floor(size.x * dpr));
+  const h = Math.max(1, Math.floor(size.y * dpr));
+
+  const depthTex = new THREE.DepthTexture(w, h);
+  depthTex.format = THREE.DepthFormat;
+  depthTex.type = THREE.UnsignedIntType;
+
+  dofRT = new THREE.WebGLRenderTarget(w, h, {
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    depthTexture: depthTex,
+    depthBuffer: true,
+  });
+
+  dofMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      tColor:        { value: null },
+      tDepth:        { value: null },
+      uFocus:        { value: 5.0 },
+      uAperture:     { value: 2.8 },
+      uMaxBlur:      { value: 0.01 },
+      uNear:         { value: 0.1 },
+      uFar:          { value: 1000.0 },
+      uResolution:   { value: new THREE.Vector2(w, h) },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = vec4(position.xy, 0.0, 1.0);
+      }
+    `,
+    fragmentShader: `
+      precision highp float;
+      uniform sampler2D tColor;
+      uniform sampler2D tDepth;
+      uniform float uFocus;
+      uniform float uAperture;
+      uniform float uMaxBlur;
+      uniform float uNear;
+      uniform float uFar;
+      uniform vec2 uResolution;
+      varying vec2 vUv;
+
+      float linearizeDepth(float d) {
+        float z = d * 2.0 - 1.0;
+        return (2.0 * uNear * uFar) / (uFar + uNear - z * (uFar - uNear));
+      }
+
+      void main() {
+        float depth = texture2D(tDepth, vUv).r;
+        float lin = linearizeDepth(depth);
+
+        // Circle of confusion: distance-from-focal-plane scaled by aperture inverse.
+        // We treat aperture as f-stop here: small f = big CoC.
+        float coc = (abs(lin - uFocus) / max(uFocus, 0.001)) * (1.0 / max(uAperture, 0.5));
+        coc = clamp(coc, 0.0, uMaxBlur);
+
+        // 16-tap disk blur scaled by CoC. Pixel-space radius derived from coc * resolution.
+        vec2 px = coc * uResolution * 0.5;
+
+        vec3 color = vec3(0.0);
+        const int TAPS = 16;
+        const float GA = 2.39996; // golden angle
+        for (int i = 0; i < TAPS; i++) {
+          float t = (float(i) + 0.5) / float(TAPS);
+          float r = sqrt(t);
+          float a = float(i) * GA;
+          vec2 offset = vec2(cos(a), sin(a)) * r * coc;
+          color += texture2D(tColor, vUv + offset).rgb;
+        }
+        color /= float(TAPS);
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
+    depthTest: false,
+    depthWrite: false,
+  });
+
+  const quadGeo = new THREE.PlaneGeometry(2, 2);
+  dofQuad = new THREE.Mesh(quadGeo, dofMaterial);
+  dofQuad.frustumCulled = false;
+}
+
+function resizeDOF() {
+  if (!dofRT) return;
+  const size = new THREE.Vector2();
+  viewer.renderer.getSize(size);
+  const dpr = viewer.renderer.getPixelRatio();
+  const w = Math.max(1, Math.floor(size.x * dpr));
+  const h = Math.max(1, Math.floor(size.y * dpr));
+  dofRT.setSize(w, h);
+  dofRT.depthTexture.image.width = w;
+  dofRT.depthTexture.image.height = h;
+  dofMaterial.uniforms.uResolution.value.set(w, h);
+}
+
+function setDOFEnabled(enabled) {
+  if (!viewer) return;
+  settings.dofEnabled = enabled;
+  document.getElementById('btn-dof-toggle').textContent = enabled ? 'On' : 'Off';
+  document.getElementById('btn-dof-toggle').classList.toggle('active', enabled);
+
+  if (enabled) {
+    ensureDOF();
+    // Flip depthWrite on the splat material so the depth buffer gets populated
+    if (viewer.splatMesh && viewer.splatMesh.material) {
+      viewer.splatMesh.material.depthWrite = true;
+      viewer.splatMesh.material.needsUpdate = true;
+    }
+    // Override viewer.render to inject the post-pass
+    if (!_origViewerRender) {
+      _origViewerRender = viewer.render.bind(viewer);
+      viewer.render = function() {
+        if (!settings.dofEnabled || !dofRT) {
+          _origViewerRender();
+          return;
+        }
+        const renderer = viewer.renderer;
+        resizeDOF();
+        const oldTarget = renderer.getRenderTarget();
+        renderer.setRenderTarget(dofRT);
+        renderer.clear(true, true, false);
+        _origViewerRender();
+        renderer.setRenderTarget(oldTarget);
+
+        dofMaterial.uniforms.tColor.value = dofRT.texture;
+        dofMaterial.uniforms.tDepth.value = dofRT.depthTexture;
+        dofMaterial.uniforms.uFocus.value = settings.focusDistance;
+        dofMaterial.uniforms.uAperture.value = settings.aperture;
+        dofMaterial.uniforms.uMaxBlur.value = settings.maxBlur;
+        dofMaterial.uniforms.uNear.value = viewer.camera.near;
+        dofMaterial.uniforms.uFar.value = viewer.camera.far;
+
+        const tmpScene = new THREE.Scene();
+        tmpScene.add(dofQuad);
+        renderer.render(tmpScene, viewer.camera);
+      };
+    }
+  } else {
+    // Restore depthWrite default and original render
+    if (viewer.splatMesh && viewer.splatMesh.material) {
+      viewer.splatMesh.material.depthWrite = false;
+      viewer.splatMesh.material.needsUpdate = true;
+    }
+    if (_origViewerRender) {
+      viewer.render = _origViewerRender;
+      _origViewerRender = null;
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Scene calibration (rotate/scale the splat mesh)
+// ────────────────────────────────────────────────────────────────────────────
+
+function applySceneCalibration() {
+  if (!viewer || !viewer.splatMesh) return;
+  const { tilt, rotate, roll, scale, lift } = settings;
+  const D = Math.PI / 180;
+  viewer.splatMesh.rotation.set(tilt * D, rotate * D, roll * D, 'XYZ');
+  viewer.splatMesh.scale.setScalar(scale);
+  viewer.splatMesh.position.y = lift;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Per-scene start view (auto-load on scene open)
+// ────────────────────────────────────────────────────────────────────────────
+
+let currentSceneKey = null;
+
+function startViewKey(filename) { return 'splattrack_start_view::' + filename; }
+
+function autoFrameScene() {
+  if (!viewer || !viewer.splatMesh) return;
+  const splatCount = viewer.splatMesh.getSplatCount();
+  if (splatCount <= 0) return;
+  const center = new THREE.Vector3();
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  const tmp = new THREE.Vector3();
+  const step = Math.max(1, Math.floor(splatCount / 5000));
+  let counted = 0;
+  for (let i = 0; i < splatCount; i += step) {
+    viewer.splatMesh.getSplatCenter(i, tmp);
+    if (Number.isFinite(tmp.x) && Number.isFinite(tmp.y) && Number.isFinite(tmp.z)) {
+      center.add(tmp); min.min(tmp); max.max(tmp); counted++;
+    }
+  }
+  if (counted > 0) center.multiplyScalar(1 / counted);
+  const size = new THREE.Vector3().subVectors(max, min);
+  const dist = Math.max(size.x, size.y, size.z) * 1.5 || 5;
+  viewer.camera.position.set(center.x, center.y, center.z + dist);
+  viewer.camera.lookAt(center);
+  if (orbitControls) { orbitControls.target.copy(center); orbitControls.update(); }
+  viewer.camera.far = Math.max(viewer.camera.far, dist * 50);
+  viewer.camera.updateProjectionMatrix();
+}
+
+function saveStartView(filename) {
+  if (!viewer || !filename) return;
+  const cam = viewer.camera;
+  const data = {
+    px: cam.position.x, py: cam.position.y, pz: cam.position.z,
+    qx: cam.quaternion.x, qy: cam.quaternion.y, qz: cam.quaternion.z, qw: cam.quaternion.w,
+    fov: cam.fov, far: cam.far,
+    tx: orbitControls ? orbitControls.target.x : 0,
+    ty: orbitControls ? orbitControls.target.y : 0,
+    tz: orbitControls ? orbitControls.target.z : 0,
+    cal: { ...settings, /* only the calibration-relevant ones */
+      tilt: settings.tilt, rotate: settings.rotate, roll: settings.roll,
+      scale: settings.scale, lift: settings.lift,
+    },
+  };
+  localStorage.setItem(startViewKey(filename), JSON.stringify(data));
+  refreshStartSavedStatus(filename);
+}
+
+function restoreStartView(filename) {
+  if (!viewer || !filename) return false;
+  const raw = localStorage.getItem(startViewKey(filename));
+  if (!raw) return false;
+  try {
+    const d = JSON.parse(raw);
+
+    // Restore calibration first so the splat mesh is in the same orientation/scale
+    if (d.cal) {
+      ['tilt','rotate','roll','scale','lift'].forEach(k => {
+        if (typeof d.cal[k] === 'number') settings[k] = d.cal[k];
+      });
+      // Reflect into UI sliders
+      const sync = (id, key, decimals, suffix) => {
+        const sl = document.getElementById(id); if (!sl) return;
+        sl.value = settings[key];
+        const valEl = document.getElementById(id.replace('sl-', 'v-'));
+        if (valEl) valEl.textContent = (+settings[key]).toFixed(decimals) + (suffix || '');
+      };
+      sync('sl-tilt',   'tilt',   0, '°');
+      sync('sl-rotate', 'rotate', 0, '°');
+      sync('sl-roll',   'roll',   0, '°');
+      sync('sl-scale',  'scale',  2, '');
+      sync('sl-lift',   'lift',   1, '');
+      applySceneCalibration();
+    }
+
+    viewer.camera.position.set(d.px, d.py, d.pz);
+    viewer.camera.quaternion.set(d.qx, d.qy, d.qz, d.qw);
+    if (typeof d.fov === 'number') {
+      viewer.camera.fov = d.fov;
+      settings.fov = d.fov;
+      const sl = document.getElementById('sl-fov');
+      const v = document.getElementById('v-fov');
+      if (sl) sl.value = d.fov;
+      if (v) v.textContent = d.fov.toFixed(1) + '°';
+    }
+    if (typeof d.far === 'number') viewer.camera.far = d.far;
+    viewer.camera.updateProjectionMatrix();
+
+    if (orbitControls) {
+      orbitControls.target.set(d.tx, d.ty, d.tz);
+      orbitControls.update();
+    }
+    return true;
+  } catch (e) {
+    console.warn('[start-view] failed to restore:', e);
+    return false;
+  }
+}
+
+function clearStartView(filename) {
+  if (!filename) return;
+  localStorage.removeItem(startViewKey(filename));
+  refreshStartSavedStatus(filename);
+}
+
+function refreshStartSavedStatus(filename) {
+  const el = document.getElementById('start-saved-status');
+  if (!el) return;
+  if (!filename) { el.textContent = ''; return; }
+  el.textContent = localStorage.getItem(startViewKey(filename))
+    ? '✓ start view saved for this scene'
+    : 'no saved start view';
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Camera presets
+// ────────────────────────────────────────────────────────────────────────────
+
+function savePreset(slot) {
+  if (!viewer) return;
+  const cam = viewer.camera;
+  presets[slot] = {
+    position:  cam.position.clone(),
+    quaternion: cam.quaternion.clone(),
+    target:    orbitControls ? orbitControls.target.clone() : new THREE.Vector3(),
+  };
+  updatePresetUI();
+  localStorage.setItem('splattrack_presets', JSON.stringify(
+    presets.map(p => p ? {
+      px: p.position.x, py: p.position.y, pz: p.position.z,
+      qx: p.quaternion.x, qy: p.quaternion.y, qz: p.quaternion.z, qw: p.quaternion.w,
+      tx: p.target.x, ty: p.target.y, tz: p.target.z,
+    } : null)
+  ));
+}
+
+function recallPreset(slot) {
+  if (!presets[slot] || !viewer) return;
+  const p = presets[slot];
+  if (settings.transitionSec <= 0) {
+    viewer.camera.position.copy(p.position);
+    viewer.camera.quaternion.copy(p.quaternion);
+    if (orbitControls) orbitControls.target.copy(p.target);
+    return;
+  }
+  transition.fromPos.copy(viewer.camera.position);
+  transition.fromQuat.copy(viewer.camera.quaternion);
+  transition.toPos.copy(p.position);
+  transition.toQuat.copy(p.quaternion);
+  transition.targetPos = p.target.clone();
+  transition.progress  = 0;
+  transition.duration  = settings.transitionSec;
+  transition.active    = true;
+}
+window.recallPreset = recallPreset; // called from inline onclick
+
+function updatePresetUI() {
+  presets.forEach((p, i) => {
+    const el = document.querySelector(`.pslot[data-slot="${i}"]`);
+    if (!el) return;
+    el.classList.toggle('saved', !!p);
+    el.querySelector('.slot-label').textContent = p ? 'Saved' : 'Empty';
+  });
+}
+
+function loadPresetsFromStorage() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('splattrack_presets') || 'null');
+    if (!Array.isArray(raw)) return;
+    raw.forEach((p, i) => {
+      if (!p) return;
+      presets[i] = {
+        position:  new THREE.Vector3(p.px, p.py, p.pz),
+        quaternion: new THREE.Quaternion(p.qx, p.qy, p.qz, p.qw),
+        target:    new THREE.Vector3(p.tx, p.ty, p.tz),
+      };
+    });
+    updatePresetUI();
+  } catch {}
+}
+loadPresetsFromStorage();
+
+function updateTransition() {
+  if (!transition.active || !viewer) return;
+  const dt = 1 / 60;
+  transition.progress = Math.min(1, transition.progress + dt / transition.duration);
+  const t = easeInOut(transition.progress);
+
+  viewer.camera.position.lerpVectors(transition.fromPos, transition.toPos, t);
+  viewer.camera.quaternion.slerpQuaternions(transition.fromQuat, transition.toQuat, t);
+  if (orbitControls && transition.targetPos) {
+    orbitControls.target.lerp(transition.targetPos, t);
+  }
+
+  if (transition.progress >= 1) transition.active = false;
+}
+
+function easeInOut(t) {
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Tracker
+// ────────────────────────────────────────────────────────────────────────────
+
+function zeroTracker() {
+  if (!tracker.lastPose || !viewer) return;
+  tracker.origin  = { ...tracker.lastPose };
+  tracker.camBase = {
+    position:  viewer.camera.position.clone(),
+    quaternion: viewer.camera.quaternion.clone(),
+  };
+  if (orbitControls) orbitControls.target.set(0, 0, 0);
+}
+
+function applyTrackerPose(pose) {
+  tracker.lastPose = pose;
+  setTrackerStatus(true, pose.source || 'tracker');
+  if (!tracker.enabled || !viewer) return;
+  if (!tracker.origin) { zeroTracker(); return; }
+
+  const { posScale, rotScale } = settings;
+  const cam = viewer.camera;
+
+  if (settings.trackerApplyPosition && pose.hasPosition && tracker.camBase) {
+    const dx = (pose.px - tracker.origin.px) * posScale;
+    const dy = (pose.py - tracker.origin.py) * posScale;
+    const dz = (pose.pz - tracker.origin.pz) * posScale;
+    if (Number.isFinite(dx) && Number.isFinite(dy) && Number.isFinite(dz)) {
+      cam.position.set(
+        tracker.camBase.position.x + dx,
+        tracker.camBase.position.y + dy,
+        tracker.camBase.position.z + dz,
+      );
+    }
+  }
+
+  if (settings.trackerApplyRotation && pose.hasRotation && tracker.camBase) {
+    // World-frame delta: rotation that took the *device* from origin → current.
+    // We want the camera to undergo the same world-frame rotation, so we
+    // PREMULTIPLY the camera base quaternion with the delta — not multiply.
+    // Multiplying applies the rotation in camera-local space, which makes
+    // device-yaw appear as roll/pitch when the camera has any pre-existing
+    // tilt.
+    const originQ = new THREE.Quaternion(
+      tracker.origin.qx, tracker.origin.qy, tracker.origin.qz, tracker.origin.qw
+    );
+    const currentQ = new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw);
+    const deltaQ = currentQ.clone().multiply(originQ.clone().invert());
+
+    if (rotScale !== 1) {
+      // Scale the delta angle by extracting axis/angle and rebuilding
+      const w = Math.max(-1, Math.min(1, deltaQ.w));
+      const angle = 2 * Math.acos(w);
+      const s = Math.sqrt(1 - w * w);
+      if (s > 1e-4) {
+        const ax = deltaQ.x / s, ay = deltaQ.y / s, az = deltaQ.z / s;
+        const half = (angle * rotScale) / 2;
+        const sh = Math.sin(half);
+        deltaQ.set(ax * sh, ay * sh, az * sh, Math.cos(half));
+      }
+    }
+    cam.quaternion.copy(tracker.camBase.quaternion).premultiply(deltaQ);
+  }
+}
+
+function applyOpenTrackPose(d) {
+  // OpenTrack: x/y/z in cm, yaw/pitch/roll in degrees
+  // Map to Three.js: x=lateral, y=vertical, z=depth (cm→m /100)
+  const DEG = Math.PI / 180;
+  const yaw   = -d.yaw   * DEG;
+  const pitch =  d.pitch * DEG;
+  const roll  = -d.roll  * DEG;
+  const q = new THREE.Quaternion();
+  q.setFromEuler(new THREE.Euler(pitch, yaw, roll, 'YXZ'));
+
+  applyTrackerPose({
+    source: 'OpenTrack',
+    hasPosition: true,
+    hasRotation: true,
+    px: d.x / 100,
+    py: d.y / 100,
+    pz: d.z / 100,
+    qx: q.x, qy: q.y, qz: q.z, qw: q.w,
+  });
+}
+
+function setTrackerStatus(connected, label) {
+  tracker.connected = connected;
+  const dot    = document.getElementById('tracker-dot');
+  const status = document.getElementById('tracker-status');
+  if (!dot || !status) return;
+  dot.className    = `dot ${connected ? 'green' : 'gray'}`;
+  status.textContent = connected ? label : 'None';
+  document.getElementById('st-tracker').textContent = connected ? `🔵 ${label}` : '';
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  FPS look: right-click drag yaws/pitches the camera in place.
+//  The orbit target follows along the new view direction so left-click
+//  orbit (around the target) still feels natural after looking around.
+// ────────────────────────────────────────────────────────────────────────────
+
+function setupFpsLook(domEl) {
+  let active = false;
+  let lastX = 0, lastY = 0;
+  let pointerId = null;
+
+  domEl.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  domEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 2) return;
+    active = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+    pointerId = e.pointerId;
+    try { domEl.setPointerCapture(e.pointerId); } catch {}
+  });
+
+  domEl.addEventListener('pointermove', (e) => {
+    if (!active || !viewer) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+
+    const sens = 0.0035;
+    const cam = viewer.camera;
+
+    // Yaw around world up (cameraUp); applied as world-space rotation
+    const worldUp = cam.up.clone().normalize();
+    const yawQ = new THREE.Quaternion().setFromAxisAngle(worldUp, -dx * sens);
+    cam.quaternion.premultiply(yawQ);
+
+    // Pitch around the camera's local right axis
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+    const pitchQ = new THREE.Quaternion().setFromAxisAngle(right, -dy * sens);
+    cam.quaternion.premultiply(pitchQ);
+
+    // Re-anchor the orbit target along the new forward direction at the
+    // same distance, so OrbitControls's left-click rotation pivots around
+    // what you're now looking at.
+    if (orbitControls) {
+      const fwd = new THREE.Vector3();
+      cam.getWorldDirection(fwd);
+      const dist = cam.position.distanceTo(orbitControls.target);
+      orbitControls.target.copy(cam.position).addScaledVector(fwd, dist);
+      orbitControls.update();
+    }
+  });
+
+  const stop = (e) => {
+    if (e.button !== 2) return;
+    active = false;
+    if (pointerId !== null) { try { domEl.releasePointerCapture(pointerId); } catch {} }
+    pointerId = null;
+  };
+  domEl.addEventListener('pointerup', stop);
+  domEl.addEventListener('pointercancel', stop);
+  window.addEventListener('blur', () => { active = false; });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Keyboard fly: WASD + QE (up/down) + Shift (speed boost)
+// ────────────────────────────────────────────────────────────────────────────
+
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  keys[e.key.toLowerCase()] = true;
+});
+window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+function updateKeyboardFly() {
+  if (!viewer || !orbitControls) return;
+  const cam = viewer.camera;
+  let speed = 0.05 * (keys['shift'] ? 8 : 1);
+
+  // Horizontal forward: project the camera's forward onto the world XZ plane
+  // so W/S always walk on the ground regardless of pitch.
+  const fwd = new THREE.Vector3();
+  cam.getWorldDirection(fwd);
+  fwd.y = 0;
+  if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); // looking straight up/down — pick a default
+  fwd.normalize();
+
+  const worldUp = new THREE.Vector3(0, 1, 0);
+  const right = new THREE.Vector3().crossVectors(fwd, worldUp).normalize();
+
+  let moved = false;
+  if (keys['w']) { cam.position.addScaledVector(fwd,     speed); orbitControls.target.addScaledVector(fwd,     speed); moved = true; }
+  if (keys['s']) { cam.position.addScaledVector(fwd,    -speed); orbitControls.target.addScaledVector(fwd,    -speed); moved = true; }
+  if (keys['a']) { cam.position.addScaledVector(right,  -speed); orbitControls.target.addScaledVector(right,  -speed); moved = true; }
+  if (keys['d']) { cam.position.addScaledVector(right,   speed); orbitControls.target.addScaledVector(right,   speed); moved = true; }
+  if (keys['e']) { cam.position.addScaledVector(worldUp, speed); orbitControls.target.addScaledVector(worldUp, speed); moved = true; }
+  if (keys['q']) { cam.position.addScaledVector(worldUp,-speed); orbitControls.target.addScaledVector(worldUp,-speed); moved = true; }
+
+  if (moved) orbitControls.update();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Gamepad
+// ────────────────────────────────────────────────────────────────────────────
+
+let gamepadIndex = -1;
+window.addEventListener('gamepadconnected', e => {
+  gamepadIndex = e.gamepad.index;
+  document.getElementById('gamepad-status').textContent = `🎮 ${e.gamepad.id.slice(0, 30)}`;
+});
+window.addEventListener('gamepaddisconnected', () => {
+  gamepadIndex = -1;
+  document.getElementById('gamepad-status').textContent = '';
+});
+
+function updateGamepad() {
+  if (gamepadIndex < 0 || !viewer || !orbitControls) return;
+  const gp = navigator.getGamepads()[gamepadIndex];
+  if (!gp) return;
+
+  const dead = 0.12;
+  const ax = (v) => Math.abs(v) > dead ? v : 0;
+
+  const lx = ax(gp.axes[0]); // left stick X — pan horizontal
+  const ly = ax(gp.axes[1]); // left stick Y — pan vertical / forward
+  const rx = ax(gp.axes[2]); // right stick X — orbit yaw
+  const ry = ax(gp.axes[3]); // right stick Y — orbit pitch
+
+  const speed = 0.04;
+  const orbitSpeed = 0.025;
+
+  if (lx || ly) {
+    orbitControls.enabled = true;
+    // Pan in camera space
+    const cam   = viewer.camera;
+    const right = new THREE.Vector3().setFromMatrixColumn(cam.matrix, 0);
+    const fwd   = new THREE.Vector3().setFromMatrixColumn(cam.matrix, 2).negate();
+    fwd.y = 0; fwd.normalize();
+
+    cam.position.addScaledVector(right, lx * speed);
+    cam.position.addScaledVector(fwd,   -ly * speed);
+    orbitControls.target.addScaledVector(right, lx * speed);
+    orbitControls.target.addScaledVector(fwd,   -ly * speed);
+  }
+
+  if (rx || ry) {
+    orbitControls.enabled = true;
+    orbitControls.target.addScaledVector(
+      new THREE.Vector3(1, 0, 0).applyQuaternion(viewer.camera.quaternion), rx * orbitSpeed
+    );
+    // Simple orbit
+    const spherical = new THREE.Spherical();
+    const offset = viewer.camera.position.clone().sub(orbitControls.target);
+    spherical.setFromVector3(offset);
+    spherical.theta -= rx * orbitSpeed;
+    spherical.phi   += ry * orbitSpeed;
+    spherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01, spherical.phi));
+    offset.setFromSpherical(spherical);
+    viewer.camera.position.copy(orbitControls.target).add(offset);
+  }
+
+  // L2 / R2 buttons for vertical movement
+  const l2 = gp.buttons[6]?.value ?? 0;
+  const r2 = gp.buttons[7]?.value ?? 0;
+  if (l2 > 0.1 || r2 > 0.1) {
+    const dy = (r2 - l2) * speed;
+    viewer.camera.position.y += dy;
+    orbitControls.target.y   += dy;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  WebSocket (tracker input + projector sync)
+// ────────────────────────────────────────────────────────────────────────────
+
+let ws = null;
+
+function wsConnect() {
+  const role = IS_PROJECTOR ? 'viewer' : 'controller';
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProto}//${location.host}?role=${role}`;
+
+  const connect = () => {
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer'; // so we can decode sync
+    window.ws = ws; // expose for debugging
+    ws.onopen = () => console.log('[WS] connected as', role);
+    ws.onclose = (e) => {
+      console.log('[WS] closed', e.code, e.reason);
+      setTimeout(connect, 2000); // reconnect
+    };
+    ws.onerror = (e) => console.warn('[WS] error', e);
+    ws.onmessage = (e) => {
+      let text = e.data;
+      if (text instanceof ArrayBuffer) text = new TextDecoder('utf-8').decode(text);
+      let msg;
+      try { msg = JSON.parse(text); } catch { console.warn('[WS] bad json:', text); return; }
+      if (msg.type === 'pose_tracker') {
+        if (window.__wsPoseCount === undefined) window.__wsPoseCount = 0;
+        window.__wsPoseCount++;
+        if (window.__wsPoseCount % 30 === 1) console.log('[WS RX pose_tracker #' + window.__wsPoseCount + ']', msg.source);
+      } else {
+        console.log('[WS RX]', msg.type, msg);
+      }
+      handleWsMessage(msg);
+    };
+  };
+  connect();
+}
+wsConnect();
+
+function wsSend(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+function handleWsMessage(msg) {
+  switch (msg.type) {
+
+    case 'pose_tracker':
+      applyTrackerPose(msg);
+      if (!IS_PROJECTOR) {
+        // Controller: apply to camera, then sync to projector
+        syncCameraToProjector();
+      }
+      break;
+
+    case 'pose_opentrack':
+      applyOpenTrackPose(msg);
+      break;
+
+    case 'tracker_disconnected':
+      setTrackerStatus(false, 'None');
+      setOrbitControlsActive(true);
+      break;
+
+    case 'tracker_recenter':
+      tracker.origin = null;
+      break;
+
+    case 'camera_sync':
+      if (IS_PROJECTOR && viewer) {
+        viewer.camera.position.set(msg.px, msg.py, msg.pz);
+        viewer.camera.quaternion.set(msg.qx, msg.qy, msg.qz, msg.qw);
+        viewer.camera.fov = msg.fov;
+        viewer.camera.updateProjectionMatrix();
+      }
+      break;
+
+    case 'settings_sync':
+      if (IS_PROJECTOR) {
+        Object.assign(settings, msg.settings);
+        applyFilters();
+        applyFov();
+        applySceneCalibration();
+      }
+      break;
+
+    case 'scene_load':
+      if (IS_PROJECTOR && msg.path) {
+        loadScene(msg.path);
+      }
+      break;
+  }
+}
+
+// Throttle camera sync to projector at ~30fps
+let lastSyncTime = 0;
+function syncCameraToProjector() {
+  if (!viewer) return;
+  const now = performance.now();
+  if (now - lastSyncTime < 33) return;
+  lastSyncTime = now;
+  const cam = viewer.camera;
+  wsSend({
+    type: 'camera_sync',
+    px: cam.position.x, py: cam.position.y, pz: cam.position.z,
+    qx: cam.quaternion.x, qy: cam.quaternion.y, qz: cam.quaternion.z, qw: cam.quaternion.w,
+    fov: cam.fov,
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Status bar
+// ────────────────────────────────────────────────────────────────────────────
+
+function updateStatusBar() {
+  if (!viewer) return;
+  const cam = viewer.camera;
+  document.getElementById('st-cam').textContent =
+    `cam ${cam.position.x.toFixed(1)}, ${cam.position.y.toFixed(1)}, ${cam.position.z.toFixed(1)}`;
+  document.getElementById('st-fov').textContent = `FOV ${cam.fov.toFixed(1)}°`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Safe area overlay
+// ────────────────────────────────────────────────────────────────────────────
+
+let safeAreaVisible = false;
+
+function drawSafeArea() {
+  const canvas = document.getElementById('safe-canvas');
+  if (!safeAreaVisible) { canvas.style.display = 'none'; return; }
+
+  canvas.style.display = 'block';
+  canvas.width  = canvas.offsetWidth  || 1920;
+  canvas.height = canvas.offsetHeight || 1080;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // 16:9 action-safe outer (93%)
+  const ow = W * 0.935;
+  const oh = H * 0.935;
+  ctx.strokeStyle = 'rgba(255,100,50,0.5)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect((W - ow) / 2, (H - oh) / 2, ow, oh);
+
+  // Title-safe inner (80%)
+  const iw = W * 0.80;
+  const ih = H * 0.80;
+  ctx.strokeStyle = 'rgba(100,200,255,0.4)';
+  ctx.strokeRect((W - iw) / 2, (H - ih) / 2, iw, ih);
+
+  // Center cross
+  ctx.setLineDash([]);
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(W/2 - 20, H/2); ctx.lineTo(W/2 + 20, H/2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W/2, H/2 - 20); ctx.lineTo(W/2, H/2 + 20); ctx.stroke();
+
+  // Speaker body outline (rough lower-third centre)
+  ctx.strokeStyle = 'rgba(255,200,50,0.3)';
+  ctx.setLineDash([4, 4]);
+  const bw = W * 0.22;
+  const bh = H * 0.65;
+  ctx.strokeRect((W - bw) / 2, H - bh - H * 0.04, bw, bh);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Slider helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+function bindSlider(id, valId, key, decimals, suffix, onChange) {
+  const sl  = document.getElementById(id);
+  const val = document.getElementById(valId);
+  if (!sl) return;
+  const fmt = (v) => v.toFixed(decimals) + (suffix || '');
+  val.textContent = fmt(+sl.value);
+  sl.addEventListener('input', () => {
+    settings[key] = +sl.value;
+    val.textContent = fmt(+sl.value);
+    onChange();
+  });
+}
+
+bindSlider('sl-exposure',  'v-exposure',  'exposure',  1, '',   applyFilters);
+bindSlider('sl-contrast',  'v-contrast',  'contrast',  1, '',   applyFilters);
+bindSlider('sl-saturation','v-saturation','saturation',1, '',   applyFilters);
+bindSlider('sl-colortemp', 'v-colortemp', 'colortemp', 0, '',   applyFilters);
+bindSlider('sl-fov',       'v-fov',       'fov',       1, '°',  applyFov);
+bindSlider('sl-tilt',      'v-tilt',      'tilt',      0, '°',  applySceneCalibration);
+bindSlider('sl-rotate',    'v-rotate',    'rotate',    0, '°',  applySceneCalibration);
+bindSlider('sl-roll',      'v-roll',      'roll',      0, '°',  applySceneCalibration);
+bindSlider('sl-scale',     'v-scale',     'scale',     2, '',   applySceneCalibration);
+bindSlider('sl-lift',      'v-lift',      'lift',      1, '',   applySceneCalibration);
+bindSlider('sl-pos-scale', 'v-pos-scale', 'posScale',  2, '',   () => {});
+bindSlider('sl-rot-scale', 'v-rot-scale', 'rotScale',  2, '',   () => {});
+bindSlider('sl-transition','v-transition','transitionSec',1,'s',() => {});
+
+// DOF sliders — value labels formatted custom
+function bindDofSlider(id, valId, key, fmt) {
+  const sl = document.getElementById(id);
+  const val = document.getElementById(valId);
+  val.textContent = fmt(+sl.value);
+  sl.addEventListener('input', () => {
+    settings[key] = +sl.value;
+    val.textContent = fmt(+sl.value);
+  });
+}
+bindDofSlider('sl-aperture',   'v-aperture',   'aperture',      v => 'f/' + v.toFixed(1));
+bindDofSlider('sl-focus-dist', 'v-focus-dist', 'focusDistance', v => v.toFixed(1));
+bindDofSlider('sl-max-blur',   'v-max-blur',   'maxBlur',       v => v.toFixed(3));
+
+document.getElementById('btn-dof-toggle').addEventListener('click', () => {
+  setDOFEnabled(!settings.dofEnabled);
+});
+
+document.getElementById('btn-focus-here').addEventListener('click', () => {
+  if (!viewer || !orbitControls) return;
+  const dist = viewer.camera.position.distanceTo(orbitControls.target);
+  settings.focusDistance = dist;
+  const sl = document.getElementById('sl-focus-dist');
+  sl.value = dist;
+  // sl has a max of 200; if scene is bigger, push the slider's max
+  if (dist > parseFloat(sl.max)) sl.max = String(dist * 2);
+  document.getElementById('v-focus-dist').textContent = dist.toFixed(1);
+});
+
+// Focal length number input → drives FOV
+document.getElementById('num-focal').addEventListener('input', (e) => {
+  const focal = parseFloat(e.target.value);
+  if (!isFinite(focal) || focal < 1) return;
+  const fov = focalToFov(focal);
+  settings.fov = fov;
+  const sl = document.getElementById('sl-fov');
+  sl.value = fov;
+  document.getElementById('v-fov').textContent = fov.toFixed(1) + '°';
+  document.getElementById('lens-preset').value = '';
+  applyFov();
+});
+
+// Lens preset
+document.getElementById('lens-preset').addEventListener('change', (e) => {
+  if (!e.target.value) return;
+  const fov = +e.target.value;
+  settings.fov = fov;
+  document.getElementById('sl-fov').value = fov;
+  document.getElementById('v-fov').textContent = fov.toFixed(1) + '°';
+  applyFov();
+});
+
+// FOV slider changing → reset lens preset dropdown
+document.getElementById('sl-fov').addEventListener('input', () => {
+  document.getElementById('lens-preset').value = '';
+});
+
+// Pixel ratio
+document.getElementById('pixel-ratio').addEventListener('change', (e) => {
+  settings.pixelRatio = +e.target.value;
+  if (viewer) viewer.renderer.setPixelRatio(settings.pixelRatio);
+});
+
+// Reset calibration
+document.getElementById('btn-reset-cal').addEventListener('click', () => {
+  ['sl-tilt','sl-rotate','sl-roll'].forEach(id => document.getElementById(id).value = '0');
+  document.getElementById('sl-scale').value = '1';
+  document.getElementById('sl-lift').value  = '0';
+  Object.assign(settings, { tilt:0, rotate:0, roll:0, scale:1, lift:0 });
+  ['v-tilt','v-rotate','v-roll'].forEach(id => document.getElementById(id).textContent = '0°');
+  document.getElementById('v-scale').textContent = '1.00';
+  document.getElementById('v-lift').textContent  = '0.0';
+  applySceneCalibration();
+});
+
+document.getElementById('btn-save-start').addEventListener('click', () => {
+  if (!currentSceneKey) return;
+  saveStartView(currentSceneKey);
+});
+
+document.getElementById('btn-reset-start').addEventListener('click', () => {
+  if (!currentSceneKey) return;
+  if (!restoreStartView(currentSceneKey)) autoFrameScene();
+});
+
+document.getElementById('btn-clear-start').addEventListener('click', () => {
+  if (!currentSceneKey) return;
+  clearStartView(currentSceneKey);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+//  File loading UI
+// ────────────────────────────────────────────────────────────────────────────
+
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) loadScene(file);
+});
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) loadScene(file);
+});
+
+document.getElementById('btn-load-server').addEventListener('click', () => {
+  const path = document.getElementById('scene-select').value;
+  if (path) loadScene(path);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Preset buttons
+// ────────────────────────────────────────────────────────────────────────────
+
+document.getElementById('btn-save-preset').addEventListener('click', () => {
+  const slot = +document.getElementById('preset-save-slot').value;
+  savePreset(slot);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Tracker controls
+// ────────────────────────────────────────────────────────────────────────────
+
+document.getElementById('btn-zero-tracker').addEventListener('click', zeroTracker);
+
+document.getElementById('cb-tracker-pos').addEventListener('change', (e) => {
+  settings.trackerApplyPosition = e.target.checked;
+});
+document.getElementById('cb-tracker-rot').addEventListener('change', (e) => {
+  settings.trackerApplyRotation = e.target.checked;
+});
+
+document.getElementById('btn-auto-pos-scale').addEventListener('click', () => {
+  if (!viewer || !viewer.splatMesh) return;
+  // Estimate scene size by sampling splat centers
+  const splatCount = viewer.splatMesh.getSplatCount();
+  if (splatCount <= 0) return;
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  const tmp = new THREE.Vector3();
+  const step = Math.max(1, Math.floor(splatCount / 2000));
+  for (let i = 0; i < splatCount; i += step) {
+    viewer.splatMesh.getSplatCenter(i, tmp);
+    if (Number.isFinite(tmp.x)) { min.min(tmp); max.max(tmp); }
+  }
+  const size = new THREE.Vector3().subVectors(max, min);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  // Aim for 1 m of physical movement = ~5% of the scene's largest dimension
+  const recommended = Math.max(1, Math.round(maxDim * 0.05));
+  settings.posScale = recommended;
+  const sl = document.getElementById('sl-pos-scale');
+  if (recommended > parseFloat(sl.max)) sl.max = String(recommended * 2);
+  sl.value = recommended;
+  document.getElementById('v-pos-scale').textContent = recommended.toFixed(1);
+  console.log('[tracker] auto pos scale set to', recommended, '(scene maxDim', maxDim.toFixed(1) + ')');
+});
+
+// ── Two-marker calibration + reference cube ─────────────────────────────────
+
+const calib = {
+  a: null, b: null,
+  markerA: null, markerB: null, line: null, cube: null,
+};
+
+function getCalibScene() {
+  return (viewer && viewer.threeScene) ? viewer.threeScene : null;
+}
+
+function makeMarker(color) {
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(0.5, 16, 12),
+    new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.85 })
+  );
+  m.renderOrder = 999;
+  return m;
+}
+
+function updateCalibLine() {
+  const scene = getCalibScene();
+  if (!scene) return;
+  if (calib.line) { scene.remove(calib.line); calib.line.geometry.dispose(); calib.line = null; }
+  if (!calib.a || !calib.b) return;
+  const geom = new THREE.BufferGeometry().setFromPoints([calib.a, calib.b]);
+  calib.line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color: 0xffff66, depthTest: false, transparent: true, opacity: 0.9 }));
+  calib.line.renderOrder = 999;
+  scene.add(calib.line);
+}
+
+function updateCalibStatus() {
+  const el = document.getElementById('calib-status');
+  const applyBtn = document.getElementById('btn-calib-apply');
+  document.getElementById('btn-mark-a').classList.toggle('active', !!calib.a);
+  document.getElementById('btn-mark-b').classList.toggle('active', !!calib.b);
+  if (calib.a && calib.b) {
+    const d = calib.a.distanceTo(calib.b);
+    el.textContent = `Δ scene = ${d.toFixed(3)} units`;
+    const meters = parseFloat(document.getElementById('calib-meters').value);
+    applyBtn.disabled = !(d > 1e-6 && meters > 0);
+  } else {
+    el.textContent = calib.a ? 'A set — orbit to second feature, then Mark B' :
+                     calib.b ? 'B set — orbit to first feature, then Mark A' :
+                     'Position orbit target on a feature edge, then Mark A';
+    applyBtn.disabled = true;
+  }
+}
+
+function setMark(which) {
+  if (!orbitControls) return;
+  const scene = getCalibScene();
+  if (!scene) return;
+  const p = orbitControls.target.clone();
+  calib[which] = p;
+  const meshKey = which === 'a' ? 'markerA' : 'markerB';
+  if (!calib[meshKey]) {
+    calib[meshKey] = makeMarker(which === 'a' ? 0x33ff66 : 0xff6666);
+    scene.add(calib[meshKey]);
+  }
+  calib[meshKey].position.copy(p);
+  updateCalibLine();
+  updateCalibStatus();
+}
+
+function clearCalib() {
+  const scene = getCalibScene();
+  if (scene) {
+    for (const key of ['markerA', 'markerB', 'line']) {
+      if (calib[key]) {
+        scene.remove(calib[key]);
+        calib[key].geometry?.dispose?.();
+        calib[key] = null;
+      }
+    }
+  }
+  calib.a = calib.b = null;
+  updateCalibStatus();
+}
+
+function applyCalib() {
+  if (!calib.a || !calib.b) return;
+  const meters = parseFloat(document.getElementById('calib-meters').value);
+  const sceneDist = calib.a.distanceTo(calib.b);
+  if (!(meters > 0) || !(sceneDist > 1e-6)) return;
+  const newScale = sceneDist / meters;
+  const old = settings.posScale;
+  settings.posScale = newScale;
+  const sl = document.getElementById('sl-pos-scale');
+  if (newScale > parseFloat(sl.max)) sl.max = String(Math.ceil(newScale * 2));
+  sl.value = newScale;
+  document.getElementById('v-pos-scale').textContent = newScale.toFixed(2);
+  console.log(`[calib] posScale ${old.toFixed(3)} → ${newScale.toFixed(3)}  (scene ${sceneDist.toFixed(3)} units = ${meters} m)`);
+  document.getElementById('calib-status').textContent =
+    `Applied: ${sceneDist.toFixed(3)} units = ${meters} m → posScale ${newScale.toFixed(2)}`;
+}
+
+function ensureRefCube() {
+  const scene = getCalibScene();
+  if (!scene || calib.cube) return;
+  const geom = new THREE.BoxGeometry(1, 1, 1);
+  const edges = new THREE.EdgesGeometry(geom);
+  calib.cube = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({
+    color: 0x66ccff, depthTest: false, transparent: true, opacity: 0.6,
+  }));
+  calib.cube.renderOrder = 998;
+  geom.dispose();
+  scene.add(calib.cube);
+}
+
+function updateRefCube() {
+  const cb = document.getElementById('cb-ref-cube');
+  if (!cb || !cb.checked || !orbitControls) {
+    if (calib.cube) calib.cube.visible = false;
+    return;
+  }
+  ensureRefCube();
+  if (calib.cube) {
+    calib.cube.visible = true;
+    calib.cube.position.copy(orbitControls.target);
+  }
+}
+
+document.getElementById('btn-mark-a').addEventListener('click', () => setMark('a'));
+document.getElementById('btn-mark-b').addEventListener('click', () => setMark('b'));
+document.getElementById('btn-calib-apply').addEventListener('click', applyCalib);
+document.getElementById('btn-calib-clear').addEventListener('click', clearCalib);
+document.getElementById('calib-meters').addEventListener('input', updateCalibStatus);
+updateCalibStatus();
+
+document.getElementById('btn-toggle-tracker').addEventListener('click', () => {
+  tracker.enabled = !tracker.enabled;
+  const btn = document.getElementById('btn-toggle-tracker');
+  btn.textContent = tracker.enabled ? 'Disable' : 'Enable';
+  btn.classList.toggle('active', tracker.enabled);
+  setOrbitControlsActive(!tracker.enabled);
+});
+
+// Cleanly detach/reattach the viewer's OrbitControls. Setting enabled=false
+// only stops mouse handlers; update() still calls lookAt(target) every frame
+// and overrides any quaternion the tracker just set. So we actually NULL out
+// viewer.controls when the tracker is driving the camera, and restore it on disable.
+let _savedOrbitControls = null;
+function setOrbitControlsActive(active) {
+  if (!viewer) return;
+  if (active) {
+    if (_savedOrbitControls && !viewer.controls) {
+      viewer.controls = _savedOrbitControls;
+      orbitControls = _savedOrbitControls;
+      window.orbitControls = orbitControls;
+      _savedOrbitControls = null;
+    }
+    if (orbitControls) orbitControls.enabled = true;
+  } else {
+    if (viewer.controls && !_savedOrbitControls) {
+      _savedOrbitControls = viewer.controls;
+      _savedOrbitControls.enabled = false;
+      viewer.controls = null;  // viewer.update() skips controls.update() when null
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Output controls
+// ────────────────────────────────────────────────────────────────────────────
+
+document.getElementById('btn-safe-area').addEventListener('click', () => {
+  safeAreaVisible = !safeAreaVisible;
+  document.getElementById('btn-safe-area').textContent = safeAreaVisible ? 'Hide' : 'Show';
+  drawSafeArea();
+});
+
+document.getElementById('btn-fullscreen').addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    document.getElementById('viewport').requestFullscreen().catch(() =>
+      document.documentElement.requestFullscreen()
+    );
+  } else {
+    document.exitFullscreen();
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Keyboard shortcuts
+// ────────────────────────────────────────────────────────────────────────────
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  switch (e.key) {
+    case '1': case '2': case '3': case '4':
+      recallPreset(+e.key - 1);
+      break;
+    case 'F11':
+      e.preventDefault();
+      document.getElementById('btn-fullscreen').click();
+      break;
+    case 'h': case 'H':
+      document.getElementById('panel').style.display =
+        document.getElementById('panel').style.display === 'none' ? '' : 'none';
+      break;
+    case 's': case 'S':
+      if (e.shiftKey) {
+        const slot = +document.getElementById('preset-save-slot').value;
+        savePreset(slot);
+      }
+      break;
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Projector: receive settings from controller on connect / periodically
+// ────────────────────────────────────────────────────────────────────────────
+
+// In controller mode: broadcast settings whenever they change (debounced)
+let settingsSyncTimer = null;
+function scheduleSettingsSync() {
+  if (IS_PROJECTOR) return;
+  clearTimeout(settingsSyncTimer);
+  settingsSyncTimer = setTimeout(() => {
+    wsSend({ type: 'settings_sync', settings: { ...settings } });
+  }, 150);
+}
+// Hook each filter/fov change to also sync
+['sl-exposure','sl-contrast','sl-saturation','sl-colortemp','sl-fov',
+ 'sl-tilt','sl-rotate','sl-roll','sl-scale','sl-lift']
+  .forEach(id => document.getElementById(id)?.addEventListener('input', scheduleSettingsSync));
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Projector auto-init on page load (just viewer, no panel)
+// ────────────────────────────────────────────────────────────────────────────
+
+if (IS_PROJECTOR) {
+  initViewer();
+}
+
+// Initial filter application
+applyFilters();
+
+</script>
+</body>
+</html>

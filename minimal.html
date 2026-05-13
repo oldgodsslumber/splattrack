@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Minimal splat test</title>
+<style>
+  body { margin: 0; background: #222; color: #fff; font-family: monospace; }
+  #info { position: fixed; top: 0; left: 0; padding: 8px; z-index: 10; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js",
+    "three/addons/": "/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="info">Loading...</div>
+<script type="module">
+import * as THREE from 'three';
+import * as GS3D from '/node_modules/@mkkellogg/gaussian-splats-3d/build/gaussian-splats-3d.module.js';
+
+const info = document.getElementById('info');
+
+const viewer = new GS3D.Viewer({
+  cameraUp: [0, 1, 0],
+  initialCameraPosition: [0, 0, 5],
+  initialCameraLookAt: [0, 0, 0],
+  sphericalHarmonicsDegree: 0,
+});
+
+window.viewer = viewer;
+window.THREE = THREE;
+
+const url = '/scenes/' + encodeURIComponent('DCclientv2.ply');
+
+info.textContent = 'Loading ' + url;
+
+viewer.addSplatScene(url, {
+  splatAlphaRemovalThreshold: 5,
+  showLoadingUI: true,
+  progressiveLoad: false,
+})
+.then(() => {
+  info.textContent = 'Loaded — splats: ' + viewer.splatMesh.getSplatCount();
+  viewer.start();
+
+  // Auto-frame to centroid
+  const c = new THREE.Vector3();
+  const tmp = new THREE.Vector3();
+  const min = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const max = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  const N = 5000;
+  const step = Math.max(1, Math.floor(viewer.splatMesh.getSplatCount() / N));
+  let n = 0;
+  for (let i = 0; i < viewer.splatMesh.getSplatCount(); i += step) {
+    viewer.splatMesh.getSplatCenter(i, tmp);
+    if (Number.isFinite(tmp.x)) { c.add(tmp); min.min(tmp); max.max(tmp); n++; }
+  }
+  c.multiplyScalar(1 / n);
+  const sz = new THREE.Vector3().subVectors(max, min);
+  const dist = Math.max(sz.x, sz.y, sz.z) * 1.5;
+  console.log('center', c.toArray(), 'size', sz.toArray(), 'dist', dist);
+
+  viewer.camera.position.set(c.x, c.y, c.z + dist);
+  viewer.camera.lookAt(c);
+  viewer.controls && viewer.controls.target.copy(c);
+  viewer.camera.far = Math.max(1000, dist * 50);
+  viewer.camera.updateProjectionMatrix();
+
+  info.textContent += ' — framed at dist ' + dist.toFixed(1);
+})
+.catch((e) => {
+  info.textContent = 'Error: ' + e.message;
+  console.error(e);
+});
+</script>
+</body>
+</html>

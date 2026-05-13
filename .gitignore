@@ -1,0 +1,11 @@
+node_modules/
+scenes/
+*.ply
+*.splat
+*.spz
+*.ksplat
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

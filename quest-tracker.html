@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SplatTrack — Quest Tracker</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0a0a0a;
+  color: #ccc;
+  font-family: 'Courier New', monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+  gap: 16px;
+}
+h1 { color: #9cf; font-size: 18px; font-weight: normal; letter-spacing: 2px; }
+.card {
+  background: #141414;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 18px 22px;
+  width: 100%;
+  max-width: 420px;
+}
+.label { color: #666; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; }
+.status { font-size: 13px; line-height: 1.7; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.green { background: #3c3; }
+.red   { background: #c33; }
+.gray  { background: #555; }
+.yellow { background: #cc3; }
+.btn {
+  background: #1a3d6a;
+  border: 1px solid #2a5a9a;
+  color: #9cf;
+  padding: 12px 24px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  border-radius: 4px;
+  width: 100%;
+  max-width: 420px;
+  transition: background 0.15s;
+}
+.btn:hover { background: #1f4a80; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.note { color: #555; font-size: 11px; text-align: center; line-height: 1.6; max-width: 420px; }
+.pose-data { font-size: 11px; color: #5af; line-height: 1.8; font-variant-numeric: tabular-nums; }
+#xr-canvas { display: none; }
+</style>
+</head>
+<body>
+
+<h1>SPLATTRACK</h1>
+<div style="color:#555;font-size:11px;letter-spacing:1px;">QUEST CONTROLLER TRACKER</div>
+
+<div class="card">
+  <div class="label">Connection</div>
+  <div class="status">
+    <div><span class="dot gray" id="ws-dot"></span> <span id="ws-status">Connecting to SplatTrack…</span></div>
+    <div><span class="dot gray" id="xr-dot"></span> <span id="xr-status">WebXR not started</span></div>
+  </div>
+</div>
+
+<button class="btn" id="start-btn" disabled>Start XR Tracking</button>
+<button class="btn" id="recenter-btn" disabled style="background:#3d1a6a;border-color:#5a2a9a;color:#c9f;">Recenter (or press A)</button>
+
+<label style="color:#888;font-size:11px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+  <input type="checkbox" id="smoothing-cb" checked>
+  Smoothing (low-pass jitter filter)
+</label>
+
+<div class="card">
+  <div class="label">Controller Pose</div>
+  <div class="pose-data" id="pose-display">
+    Waiting for tracking…
+  </div>
+</div>
+
+<div class="note">
+  Open this page in the Quest browser.<br>
+  Mount a Touch controller on your camera rig,<br>
+  then tap <strong>Start XR Tracking</strong>.<br><br>
+  The Quest headset must be nearby with cameras active.<br>
+  Controller range: ~3–4m, within headset FOV.
+</div>
+
+<canvas id="xr-canvas"></canvas>
+
+<script>
+// ── WebSocket connection ─────────────────────────────────────────────────────
+
+const WS_URL = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}?role=tracker`;
+let ws = null;
+let wsReady = false;
+
+function wsConnect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    wsReady = true;
+    setStatus('ws-dot', 'green', 'ws-status', `Connected to ${location.host}`);
+    document.getElementById('start-btn').disabled = false;
+  };
+  ws.onclose = () => {
+    wsReady = false;
+    setStatus('ws-dot', 'red', 'ws-status', 'Disconnected — retrying…');
+    document.getElementById('start-btn').disabled = true;
+    setTimeout(wsConnect, 2000);
+  };
+  ws.onerror = () => {};
+}
+wsConnect();
+
+function wsSend(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// ── WebXR ────────────────────────────────────────────────────────────────────
+
+let xrSession = null;
+let xrRefSpace = null;
+let activeController = null;  // which XRInputSource we're tracking
+
+async function startXR() {
+  if (!navigator.xr) {
+    setStatus('xr-dot', 'red', 'xr-status', 'WebXR not supported in this browser');
+    return;
+  }
+
+  const supported = await navigator.xr.isSessionSupported('immersive-vr');
+  if (!supported) {
+    setStatus('xr-dot', 'yellow', 'xr-status', 'Trying inline XR mode…');
+    // Try viewer mode (works without headset in browser)
+    await startInlineXR();
+    return;
+  }
+
+  try {
+    setStatus('xr-dot', 'yellow', 'xr-status', 'Requesting XR session…');
+    xrSession = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
+    });
+    await setupXRSession(xrSession, 'local-floor');
+    setStatus('xr-dot', 'green', 'xr-status', 'XR session active');
+    document.getElementById('start-btn').textContent = 'Stop Tracking';
+    document.getElementById('start-btn').onclick = stopXR;
+    document.getElementById('recenter-btn').disabled = false;
+  } catch (err) {
+    setStatus('xr-dot', 'red', 'xr-status', `XR error: ${err.message}`);
+  }
+}
+
+async function startInlineXR() {
+  try {
+    xrSession = await navigator.xr.requestSession('inline');
+    await setupXRSession(xrSession, 'viewer');
+    setStatus('xr-dot', 'green', 'xr-status', 'Inline XR active (rotation only)');
+  } catch (err) {
+    setStatus('xr-dot', 'red', 'xr-status', `Inline XR failed: ${err.message}`);
+  }
+}
+
+async function setupXRSession(session, refSpaceType) {
+  const canvas = document.getElementById('xr-canvas');
+  const gl = canvas.getContext('webgl', { xrCompatible: true });
+  await gl.makeXRCompatible();
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+
+  try {
+    xrRefSpace = await session.requestReferenceSpace(refSpaceType);
+  } catch {
+    xrRefSpace = await session.requestReferenceSpace('viewer');
+  }
+
+  session.requestAnimationFrame(onXRFrame);
+
+  session.addEventListener('end', () => {
+    setStatus('xr-dot', 'gray', 'xr-status', 'XR session ended');
+    document.getElementById('start-btn').textContent = 'Start XR Tracking';
+    document.getElementById('start-btn').onclick = startXR;
+    document.getElementById('recenter-btn').disabled = true;
+    xrSession = null;
+    resetSmoothing();
+  });
+}
+
+function stopXR() {
+  if (xrSession) xrSession.end();
+}
+
+let aButtonPrev = false;
+
+function onXRFrame(time, frame) {
+  if (!xrSession) return;
+  xrSession.requestAnimationFrame(onXRFrame);
+
+  const inputSources = [...xrSession.inputSources];
+
+  // Prefer right-hand controller, fallback to any
+  activeController = inputSources.find(s => s.handedness === 'right')
+    || inputSources.find(s => s.handedness === 'left')
+    || inputSources[0];
+
+  // A-button edge-detect → recenter (gamepad button index 4 on right Touch)
+  const aBtn = activeController?.gamepad?.buttons?.[4]?.pressed ?? false;
+  if (aBtn && !aButtonPrev) sendRecenter();
+  aButtonPrev = aBtn;
+
+  if (!activeController || !activeController.gripSpace) {
+    // No controller available — fall back to viewer (headset) pose
+    const viewerPose = frame.getViewerPose(xrRefSpace);
+    if (viewerPose) sendHeadsetPose(viewerPose);
+    updatePoseDisplay(null, viewerPose);
+    return;
+  }
+
+  // Get controller grip pose
+  const gripPose = frame.getPose(activeController.gripSpace, xrRefSpace);
+  if (!gripPose) return;
+
+  sendControllerPose(gripPose, activeController.handedness);
+  updatePoseDisplay(gripPose, null);
+}
+
+// ── Smoothing (low-pass lerp/slerp on pose stream) ───────────────────────────
+
+const SMOOTH_ALPHA = 0.35;
+let smoothPos = null;   // {x, y, z}
+let smoothQuat = null;  // {x, y, z, w}
+
+function resetSmoothing() { smoothPos = null; smoothQuat = null; }
+
+function slerpQuat(a, b, t) {
+  // Quaternion slerp; flip b if dot < 0 for shortest path.
+  let dot = a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;
+  let bx = b.x, by = b.y, bz = b.z, bw = b.w;
+  if (dot < 0) { bx = -bx; by = -by; bz = -bz; bw = -bw; dot = -dot; }
+  if (dot > 0.9995) {
+    // Near-parallel → linear blend + renormalize
+    const x = a.x + (bx - a.x) * t;
+    const y = a.y + (by - a.y) * t;
+    const z = a.z + (bz - a.z) * t;
+    const w = a.w + (bw - a.w) * t;
+    const n = Math.hypot(x, y, z, w) || 1;
+    return { x: x/n, y: y/n, z: z/n, w: w/n };
+  }
+  const theta = Math.acos(Math.max(-1, Math.min(1, dot)));
+  const sinT = Math.sin(theta);
+  const sA = Math.sin((1 - t) * theta) / sinT;
+  const sB = Math.sin(t * theta) / sinT;
+  return {
+    x: a.x * sA + bx * sB,
+    y: a.y * sA + by * sB,
+    z: a.z * sA + bz * sB,
+    w: a.w * sA + bw * sB,
+  };
+}
+
+function smoothPose(p, q) {
+  if (!document.getElementById('smoothing-cb').checked) {
+    smoothPos  = { x: p.x, y: p.y, z: p.z };
+    smoothQuat = { x: q.x, y: q.y, z: q.z, w: q.w };
+    return { p: smoothPos, q: smoothQuat };
+  }
+  if (!smoothPos) smoothPos = { x: p.x, y: p.y, z: p.z };
+  else {
+    smoothPos.x += (p.x - smoothPos.x) * SMOOTH_ALPHA;
+    smoothPos.y += (p.y - smoothPos.y) * SMOOTH_ALPHA;
+    smoothPos.z += (p.z - smoothPos.z) * SMOOTH_ALPHA;
+  }
+  if (!smoothQuat) smoothQuat = { x: q.x, y: q.y, z: q.z, w: q.w };
+  else smoothQuat = slerpQuat(smoothQuat, q, SMOOTH_ALPHA);
+  return { p: smoothPos, q: smoothQuat };
+}
+
+function sendRecenter() {
+  wsSend({ type: 'tracker_recenter' });
+  resetSmoothing();
+}
+document.getElementById('recenter-btn').addEventListener('click', sendRecenter);
+document.getElementById('smoothing-cb').addEventListener('change', resetSmoothing);
+
+function sendControllerPose(pose, hand) {
+  const { p, q } = smoothPose(pose.transform.position, pose.transform.orientation);
+  wsSend({
+    type: 'pose_tracker',
+    source: `Quest (${hand})`,
+    hasPosition: true,
+    hasRotation: true,
+    px: p.x, py: p.y, pz: p.z,
+    qx: q.x, qy: q.y, qz: q.z, qw: q.w,
+  });
+}
+
+function sendHeadsetPose(viewerPose) {
+  const view = viewerPose.views[0];
+  if (!view) return;
+  const { p, q } = smoothPose(viewerPose.transform.position, viewerPose.transform.orientation);
+  wsSend({
+    type: 'pose_tracker',
+    source: 'Quest Headset',
+    hasPosition: true,
+    hasRotation: true,
+    px: p.x, py: p.y, pz: p.z,
+    qx: q.x, qy: q.y, qz: q.z, qw: q.w,
+  });
+}
+
+function updatePoseDisplay(controllerPose, viewerPose) {
+  const pose = controllerPose || viewerPose;
+  if (!pose) return;
+  const p = pose.transform.position;
+  const q = pose.transform.orientation;
+  document.getElementById('pose-display').innerHTML =
+    `source: ${activeController ? activeController.handedness : 'headset'}<br>` +
+    `pos  X ${p.x.toFixed(3)}  Y ${p.y.toFixed(3)}  Z ${p.z.toFixed(3)}<br>` +
+    `quat X ${q.x.toFixed(3)}  Y ${q.y.toFixed(3)}  Z ${q.z.toFixed(3)}  W ${q.w.toFixed(3)}`;
+}
+
+// ── UI ───────────────────────────────────────────────────────────────────────
+
+document.getElementById('start-btn').addEventListener('click', startXR);
+
+function setStatus(dotId, color, labelId, text) {
+  const dot = document.getElementById(dotId);
+  dot.className = `dot ${color}`;
+  document.getElementById(labelId).textContent = text;
+}
+</script>
+</body>
+</html>
