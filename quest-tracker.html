@@ -203,6 +203,7 @@ function wsSend(obj) {
 let xrSession = null;
 let xrRefSpace = null;
 let xrGL = null;
+let xrIsAR = false;   // true if running in immersive-ar (passthrough) mode
 let activeController = null;  // which XRInputSource we're tracking
 
 async function startXR() {
@@ -211,21 +212,27 @@ async function startXR() {
     return;
   }
 
-  const supported = await navigator.xr.isSessionSupported('immersive-vr');
-  if (!supported) {
+  // Prefer immersive-ar so Quest 3 shows color passthrough (operator can see
+  // the real world / camera rig). Fall back to immersive-vr (opaque) on older
+  // Quests or browsers that don't support AR. Fall back further to inline.
+  const arSupported = await navigator.xr.isSessionSupported('immersive-ar').catch(() => false);
+  const vrSupported = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
+
+  if (!arSupported && !vrSupported) {
     setStatus('xr-dot', 'yellow', 'xr-status', 'Trying inline XR mode…');
-    // Try viewer mode (works without headset in browser)
     await startInlineXR();
     return;
   }
 
   try {
     setStatus('xr-dot', 'yellow', 'xr-status', 'Requesting XR session…');
-    xrSession = await navigator.xr.requestSession('immersive-vr', {
+    const mode = arSupported ? 'immersive-ar' : 'immersive-vr';
+    xrIsAR = (mode === 'immersive-ar');
+    xrSession = await navigator.xr.requestSession(mode, {
       optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'],
     });
     await setupXRSession(xrSession, 'local-floor');
-    setStatus('xr-dot', 'green', 'xr-status', 'XR session active');
+    setStatus('xr-dot', 'green', 'xr-status', xrIsAR ? 'XR (passthrough) active' : 'XR (VR) active');
     document.getElementById('start-btn').textContent = 'Stop Tracking';
     document.getElementById('start-btn').onclick = stopXR;
     document.getElementById('recenter-btn').disabled = false;
@@ -279,12 +286,17 @@ function onXRFrame(time, frame) {
   if (!xrSession) return;
   xrSession.requestAnimationFrame(onXRFrame);
 
-  // Clear the XR framebuffer so the headset shows a neutral gray instead of
-  // pure black (we don't render content here; the Quest's only job is tracking).
+  // Clear the XR framebuffer. In AR mode we clear with alpha 0 so the Quest's
+  // passthrough cameras show through; in VR mode we clear to dark gray so the
+  // headset isn't pure black.
   const glLayer = xrSession.renderState.baseLayer;
   if (glLayer && xrGL) {
     xrGL.bindFramebuffer(xrGL.FRAMEBUFFER, glLayer.framebuffer);
-    xrGL.clearColor(0.12, 0.14, 0.18, 1.0);
+    if (xrIsAR) {
+      xrGL.clearColor(0, 0, 0, 0);
+    } else {
+      xrGL.clearColor(0.12, 0.14, 0.18, 1.0);
+    }
     xrGL.clear(xrGL.COLOR_BUFFER_BIT | xrGL.DEPTH_BUFFER_BIT);
   }
 
