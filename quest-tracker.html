@@ -202,6 +202,7 @@ function wsSend(obj) {
 
 let xrSession = null;
 let xrRefSpace = null;
+let xrGL = null;
 let activeController = null;  // which XRInputSource we're tracking
 
 async function startXR() {
@@ -247,6 +248,7 @@ async function setupXRSession(session, refSpaceType) {
   const canvas = document.getElementById('xr-canvas');
   const gl = canvas.getContext('webgl', { xrCompatible: true });
   await gl.makeXRCompatible();
+  xrGL = gl;
   session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
 
   try {
@@ -276,6 +278,15 @@ let aButtonPrev = false;
 function onXRFrame(time, frame) {
   if (!xrSession) return;
   xrSession.requestAnimationFrame(onXRFrame);
+
+  // Clear the XR framebuffer so the headset shows a neutral gray instead of
+  // pure black (we don't render content here; the Quest's only job is tracking).
+  const glLayer = xrSession.renderState.baseLayer;
+  if (glLayer && xrGL) {
+    xrGL.bindFramebuffer(xrGL.FRAMEBUFFER, glLayer.framebuffer);
+    xrGL.clearColor(0.12, 0.14, 0.18, 1.0);
+    xrGL.clear(xrGL.COLOR_BUFFER_BIT | xrGL.DEPTH_BUFFER_BIT);
+  }
 
   const inputSources = [...xrSession.inputSources];
 
