@@ -301,16 +301,19 @@ function onXRFrame(time, frame) {
   aButtonPrev = aBtn;
 
   if (!activeController || !activeController.gripSpace) {
-    // No controller available — fall back to viewer (headset) pose
-    const viewerPose = frame.getViewerPose(xrRefSpace);
-    if (viewerPose) sendHeadsetPose(viewerPose);
-    updatePoseDisplay(null, viewerPose);
+    // No controller in view of the headset cameras. Do NOT fall back to the
+    // headset pose — for a camera-rig setup, headset motion is noise we want
+    // to ignore (headset may be held in hand, sitting on a desk, etc.).
+    updatePoseDisplay(null, null, 'No controller — point headset cameras at it');
     return;
   }
 
   // Get controller grip pose
   const gripPose = frame.getPose(activeController.gripSpace, xrRefSpace);
-  if (!gripPose) return;
+  if (!gripPose) {
+    updatePoseDisplay(null, null, 'Controller registered but pose unavailable');
+    return;
+  }
 
   sendControllerPose(gripPose, activeController.handedness);
   updatePoseDisplay(gripPose, null);
@@ -400,9 +403,12 @@ function sendHeadsetPose(viewerPose) {
   });
 }
 
-function updatePoseDisplay(controllerPose, viewerPose) {
+function updatePoseDisplay(controllerPose, viewerPose, status) {
   const pose = controllerPose || viewerPose;
-  if (!pose) return;
+  if (!pose) {
+    document.getElementById('pose-display').textContent = status || 'No pose';
+    return;
+  }
   const p = pose.transform.position;
   const q = pose.transform.orientation;
   document.getElementById('pose-display').innerHTML =
